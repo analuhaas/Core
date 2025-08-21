@@ -25,9 +25,15 @@
  * @author Ayoub Farah Hassan <ayoub.farah-hassan@laas.fr>
  */
 
+/*--------------Zephyr---------------------------------------- */
+#include <zephyr/console/console.h>
+
 /* --------------OWNTECH APIs---------------------------------- */
 #include "SpinAPI.h"
 #include "TaskAPI.h"
+
+/* --------------External libraries---------------------------- */
+#include "stdlib.h" // C standard library, obtain atoi function
 
 /* --------------SETUP FUNCTIONS DECLARATION------------------- */
 
@@ -36,14 +42,35 @@ void setup_routine();
 
 /* --------------LOOP FUNCTIONS DECLARATION-------------------- */
 
+/* Code to be executed in the slow communication task */
+void loop_communication_task();
 /* Code to be executed in the background task */
 void loop_background_task();
 /* Code to be executed in real time in the critical task */
 void loop_critical_task();
 
+
 /* --------------USER VARIABLES DECLARATIONS------------------- */
+/* Serial command */
+uint8_t received_serial_char;
 
+/* Voltage reference */
+static float32_t voltage_reference = 5;
 
+/* Pad variables */
+char buffer[4]; 
+int index = 0;
+float new_voltage_reference = 0.0;
+bool enter_captured = false; 
+
+/* LIST OF POSSIBLE MODES FOR THE OWNTECH CONVERTER */
+enum serial_interface_menu_mode
+{
+    IDLEMODE = 0,
+    POWERMODE
+};
+
+uint8_t mode = IDLEMODE;
 
 /* --------------SETUP FUNCTIONS------------------------------- */
 
@@ -59,14 +86,15 @@ void loop_critical_task();
 void setup_routine()
 {
     /* Declare task */
-    uint32_t background_task_number =
-                            task.createBackground(loop_background_task);
+    uint32_t background_task_number = task.createBackground(loop_background_task);
+    uint32_t com_task_number = task.createBackground(loop_communication_task);
 
     /* Uncomment following line if you use the critical task */
     /* task.createCritical(loop_critical_task, 500); */
 
     /* Finally, start tasks */
     task.startBackground(background_task_number);
+    task.startBackground(com_task_number);
     /* Uncomment following line if you use the critical task */
     /* task.startCritical(); */
 }
@@ -81,11 +109,84 @@ void setup_routine()
  */
 void loop_background_task()
 {
-    /* Task content */
-    spin.led.toggle();
+    if (mode == IDLEMODE)
+    {
+        /* Task content */
+        spin.led.toggle();
+
+    }
+    if (mode == POWERMODE)
+    {
+        spin.led.turnOn();
+        printk("%1.f:", voltage_reference);
+        printk("\n");
+    }
 
     /* Pause between two runs of the task */
     task.suspendBackgroundMs(1000);
+}
+
+/**
+ * This tasks implements a minimalistic USB serial interface to control
+ * the buck converter.
+ */
+void loop_communication_task()
+{
+    received_serial_char = console_getchar();
+    switch (received_serial_char)
+    {
+    case 'h':
+        /*----------SERIAL INTERFACE MENU----------------------- */
+        printk(" ________________________________________ \n"
+            "|     ---- MENU buck voltage mode ----   |\n"
+            "|     press i : idle mode                |\n"
+            "|     press p : power mode               |\n"
+            "|     press r : record data              |\n"
+            "|     press a : toggle enable_acq var    |\n"
+            "|________________________________________|\n\n");
+        /*------------------------------------------------------ */
+        break;
+    case 'i':
+        printk("idle mode\n");
+        mode = IDLEMODE;
+        break;
+    case 'p':
+        printk("power mode\n");
+        printk("Voltage output is initialized at %f V\n", voltage_reference);
+        printk("Enter the new voltage output (between 0 and 10 V): ");
+        mode = POWERMODE;
+        break;
+    default:
+        break;
+    }
+    
+     
+    
+    if (received_serial_char == '\n') {
+        enter_captured = true; 
+    }
+    
+    else if (received_serial_char >= '0' && received_serial_char <= '9' && index < 3) {
+        buffer[index] = received_serial_char;
+        buffer[index+1] = '\0';
+        index++;
+    }
+
+    if (enter_captured == true) {
+        new_voltage_reference = atoi(buffer);
+        if (new_voltage_reference < 0 || new_voltage_reference > 10) {
+            index = 0;
+            buffer[0] = '\0';
+            printk("Invalid input. Voltage reference must be between 0 and 10 V.\n");
+        } else {
+            voltage_reference = new_voltage_reference;
+            index = 0;
+            buffer[0] = '\0';
+            printk("Voltage reference set to %f V.\n", voltage_reference);
+        }
+        enter_captured = false;
+    }
+    
 }
 
 /**
