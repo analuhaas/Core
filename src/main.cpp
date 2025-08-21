@@ -123,7 +123,7 @@ uint8_t mode = IDLEMODE;
 void setup_routine()
 {
     /* Buck voltage mode */
-    shield.power.initBuck(ALL);
+    shield.power.initBuck(LEG1);
 
     shield.sensors.enableDefaultTwistSensors();
 
@@ -195,7 +195,7 @@ void loop_communication_task()
 
         if (enter_captured == true) {
             new_voltage_reference = atoi(buffer);
-            if (new_voltage_reference < 0 || new_voltage_reference > 10) {
+            if (new_voltage_reference < 0 || new_voltage_reference > 20) {
                 index = 0;
                 buffer[0] = '\0';
                 printk("Invalid input. Voltage reference must be between 0 and 10 V.\n");
@@ -238,13 +238,11 @@ void loop_application_task()
         meas_data = shield.sensors.getLatestValue(TEMP_SENSOR_2);
         if (meas_data != NO_VALUE) temp_2_value = meas_data;
 
-
+        printk("%.3f:", (double)voltage_reference);
         printk("%.3f:", (double)I1_low_value);
         printk("%.3f:", (double)V1_low_value);
-        printk("%.3f:", (double)voltage_reference);
         printk("%.3f:", (double)I2_low_value);
         printk("%.3f:", (double)V2_low_value);
-        printk("%.3f:", (double)voltage_reference);
         printk("%.3f:", (double)I_high);
         printk("%.3f:", (double)V_high);
         printk("%.3f:", (double)temp_1_value);
@@ -293,13 +291,13 @@ void loop_critical_task()
     else if (mode == POWERMODE)
     {
         duty_cycle = pid.calculateWithReturn(voltage_reference, V1_low_value);
-        shield.power.setDutyCycle(ALL,duty_cycle);
+        shield.power.setDutyCycle(LEG1,duty_cycle);
 
         /* Set POWER ON */
         if (!pwm_enable)
         {
             pwm_enable = true;
-            shield.power.start(ALL);
+            shield.power.start(LEG1);
         }
     }
 
