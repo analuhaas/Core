@@ -98,7 +98,7 @@ static bool trigger = false;
 
 /* SM switching variables */
 
-static uint8_t g = 2;
+static uint8_t g = 0;
 static float32_t g_float;
 static float32_t counter_seq;
 static uint8_t seq_ON_OFF[2] = {0, 1}; // Connection sequence for HF
@@ -106,6 +106,7 @@ static uint8_t ONOFF_index;
 static float32_t counter_ONOFF;
 static float32_t f_sw_HF = 1000; // in Hz
 static float32_t HF_period = 1/f_sw_HF;
+static float32_t decalage_source = 5;
 
 /*--------------------------------------------------------------- */
 
@@ -318,11 +319,11 @@ void loop_critical_task()
     else if (mode == SEQUENCEMODE)
     {
         
-        if(counter_seq >= 0 and counter_seq < 0.1) // BLOCK
+        if(counter_seq >= decalage_source + 0 and counter_seq < decalage_source + 0.1) // BLOCK
         {
             g=2;
         }
-        if(counter_seq >= 0.1 and counter_seq < 0.13) // ON/OFF
+        if(counter_seq >= decalage_source + 0.1 and counter_seq < decalage_source + 0.13) // ON/OFF
         {
             g = seq_ON_OFF[ONOFF_index];
             if (counter_ONOFF >= HF_period/2)
@@ -338,19 +339,19 @@ void loop_critical_task()
             }
             counter_ONOFF = counter_ONOFF + control_task_period;
         }
-        if(counter_seq >= 0.13 and counter_seq < 0.22) // BLOCK
+        if(counter_seq >= decalage_source + 0.13 and counter_seq < decalage_source + 0.22) // BLOCK
         {
             g=2;
         }
-        if(counter_seq >= 0.22 and counter_seq < 0.25) // ON/OFF
+        if(counter_seq >= decalage_source + 0.22 and counter_seq < decalage_source + 0.25) // ON/OFF
         {
             
         }
-        if(counter_seq >= 0.25 and counter_seq < 0.3) // BLOCK
+        if(counter_seq >= decalage_source + 0.25 and counter_seq < decalage_source + 0.3) // BLOCK
         {
             g=2;
         }
-        if(counter_seq >= 0.3)
+        if(counter_seq >= decalage_source + 0.3)
         {
             mode == IDLEMODE;
         }
