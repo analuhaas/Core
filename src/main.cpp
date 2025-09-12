@@ -54,7 +54,8 @@ void loop_critical_task();
 /*--------------USER VARIABLES DECLARATIONS------------------- */
 
 /* [us] period of the control task */
-static uint32_t control_task_period = 100/1000000;
+static uint32_t control_task_period = 100; // 100 µs
+static const float32_t Ts = control_task_period * 1e-6F;
 /* [bool] state of the PWM (ctrl task) */
 static bool pwm_enable = false;
 
@@ -89,24 +90,28 @@ static Pid pid;
 
 /* Scope variables */
 
-
 static const uint16_t NB_DATAS = 2048; //Number of data acquired
 static const float32_t minimal_step = 1.0F / (float32_t) NB_DATAS;
 static ScopeMimicry scope(NB_DATAS, 5);
 static bool is_downloading;
 static bool trigger = false;
+static uint32_t scope_timer = 0;
+static uint32_t scope_period = 10; // scope acquire data every t = scope_period (10) * critical_task_period (100 µs) = 1 ms;
 
 /* SM switching variables */
 
-static uint8_t g = 0;
+static uint8_t g = 2;
 static float32_t g_float;
-static float32_t counter_seq;
+static float seq_timer = 0;
+static uint32_t critical_task_timer = 0;
+static const float32_t decalage_source = 0;
+static bool Vsource_turnoff_indicator = false;
+static bool Vsource_ON_once_indicator = false;
 static uint8_t seq_ON_OFF[2] = {0, 1}; // Connection sequence for HF
 static uint8_t ONOFF_index;
 static float32_t counter_ONOFF;
 static float32_t f_sw_HF = 1000; // in Hz
 static float32_t HF_period = 1/f_sw_HF;
-static float32_t decalage_source = 5;
 
 /*--------------------------------------------------------------- */
 
@@ -114,8 +119,8 @@ static float32_t decalage_source = 5;
 enum serial_interface_menu_mode
 {
     IDLEMODE = 0,
-    DECHARGEMODE,
-    SEQUENCEMODE
+    DECHARGEMODE = 1,
+    SEQUENCEMODE = 2,
 };
 
 uint8_t mode = IDLEMODE;
@@ -225,7 +230,7 @@ void loop_communication_task()
     case 's':
         mode = SEQUENCEMODE;
         trigger = true;
-        counter_seq = 0;
+        seq_timer = 0;
         break;
     case 'r':
         is_downloading = true;
@@ -245,6 +250,10 @@ void loop_application_task()
     if (mode == IDLEMODE)
     {
         spin.led.turnOff();
+        if (is_downloading) {
+            dump_scope_datas(scope);
+        }
+        is_downloading = false;
     }
     else if (mode == DECHARGEMODE)
     {
@@ -291,6 +300,14 @@ void loop_critical_task()
     if (meas_data != NO_VALUE) V_high = meas_data;
 
 
+    /*
+    //For testing logic
+    if(critical_task_timer == 100000)
+        {
+            V1_low_value=20;
+        }
+    */
+
     if (mode == IDLEMODE)
     {
         if (pwm_enable == true)
@@ -299,13 +316,12 @@ void loop_critical_task()
         }
         pwm_enable = false;
 
-        if (V1_low_value>=2) // If VDC is ON, starts sequence with small delay
+        if (V1_low_value>=2 && !Vsource_ON_once_indicator) // If VDC is ON, starts sequence with small delay
         {
             mode = SEQUENCEMODE;
             trigger = true;
-            counter_seq = 0;
+            Vsource_ON_once_indicator = true;
         }
-        
     }
     else if (mode == DECHARGEMODE)
     {
@@ -319,11 +335,11 @@ void loop_critical_task()
     else if (mode == SEQUENCEMODE)
     {
         
-        if(counter_seq >= decalage_source + 0 and counter_seq < decalage_source + 0.1) // BLOCK
+        if(seq_timer >= decalage_source + 0 && seq_timer < decalage_source + 0.1) // BLOCK
         {
             g=2;
         }
-        if(counter_seq >= decalage_source + 0.1 and counter_seq < decalage_source + 0.13) // ON/OFF
+        if(seq_timer >= decalage_source + 0.1 && seq_timer < decalage_source + 0.13) // ON/OFF
         {
             g = seq_ON_OFF[ONOFF_index];
             if (counter_ONOFF >= HF_period/2)
@@ -339,19 +355,19 @@ void loop_critical_task()
             }
             counter_ONOFF = counter_ONOFF + control_task_period;
         }
-        if(counter_seq >= decalage_source + 0.13 and counter_seq < decalage_source + 0.22) // BLOCK
+        if(seq_timer >= decalage_source + 0.13 && seq_timer < decalage_source + 0.22) // BLOCK
         {
             g=2;
         }
-        if(counter_seq >= decalage_source + 0.22 and counter_seq < decalage_source + 0.25) // ON/OFF
+        if(seq_timer >= decalage_source + 0.22 && seq_timer < decalage_source + 0.25) // ON/OFF
         {
             
         }
-        if(counter_seq >= decalage_source + 0.25 and counter_seq < decalage_source + 0.3) // BLOCK
+        if(seq_timer >= decalage_source + 0.25 && seq_timer < decalage_source + 0.3) // BLOCK
         {
             g=2;
         }
-        if(counter_seq >= decalage_source + 0.3)
+        if(seq_timer >= decalage_source + 0.3)
         {
             mode == IDLEMODE;
         }
@@ -383,10 +399,18 @@ void loop_critical_task()
             pwm_enable = false;
         }            
     
+        g_float = (float)g;
+        /* Scope data acquisition */
+        if (scope_timer == scope_period)
+        {
+            scope.acquire();
+            scope_timer = 0;
+        }
+        scope_timer++;
+        seq_timer += Ts;
     }
-    g_float = (float)g;
-    scope.acquire();
-    counter_seq = counter_seq + control_task_period;
+
+    critical_task_timer++;
 
 }
 
