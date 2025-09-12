@@ -177,8 +177,8 @@ void setup_routine()
     scope.connectChannel(I1_low_value, "I_SM");
     scope.connectChannel(V1_low_value, "V_SM");
     scope.connectChannel(g_float, "mode");
-    scope.connectChannel(I_high, "I_high"); // to verify if there is nothing
-    scope.connectChannel(V_high, "V_high"); // to verify if there is nothing
+    scope.connectChannel(seq_timer, "time"); // to verify if there is nothing
+    scope.connectChannel(V_high, "V_high"); // to verify capacitor voltage
     scope.set_trigger(&a_trigger);
     scope.set_delay(0.0F);
     scope.start();
