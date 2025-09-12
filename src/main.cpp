@@ -84,7 +84,6 @@ static float32_t Td = 0.0;
 static float32_t N = 0.0;
 static float32_t upper_bound = 1.0F;
 static float32_t lower_bound = 0.0F;
-static float32_t Ts = control_task_period * 1e-6;
 static PidParams pid_params(Ts, kp, Ti, Td, N, lower_bound, upper_bound);
 static Pid pid;
 
@@ -96,7 +95,7 @@ static ScopeMimicry scope(NB_DATAS, 5);
 static bool is_downloading;
 static bool trigger = false;
 static uint32_t scope_timer = 0;
-static uint32_t scope_period = 10; // scope acquire data every t = scope_period (10) * critical_task_period (100 µs) = 1 ms;
+static uint32_t scope_period = 2; // scope acquire data every t = scope_period (10) * critical_task_period (100 µs) = 1 ms;
 
 /* SM switching variables */
 
@@ -109,7 +108,7 @@ static bool Vsource_turnoff_indicator = false;
 static bool Vsource_ON_once_indicator = false;
 static uint8_t seq_ON_OFF[2] = {0, 1}; // Connection sequence for HF
 static uint8_t ONOFF_index;
-static float32_t counter_ONOFF;
+static float counter_ONOFF;
 static float32_t f_sw_HF = 1000; // in Hz
 static float32_t HF_period = 1/f_sw_HF;
 
@@ -267,9 +266,14 @@ void loop_application_task()
 
         printk("%.3f:", (double)I1_low_value);
         printk("%.3f:", (double)V1_low_value);
-        printk("%.3f:", (double)V_high);
+        printk("%.3f:", (double)g);
+        printk("%.3f:", (double)Vsource_ON_once_indicator);
+        printk("%.3f:", (double)seq_timer);
+        printk("%.3f:", (double)critical_task_timer);
+        printk("%.3f:", (double)scope_timer);
+        printk("%i:", mode);
         printk("\n");
-    task.suspendBackgroundMs(1);
+    task.suspendBackgroundMs(1000);
 }
 
 /**
@@ -283,10 +287,10 @@ void loop_critical_task()
 {
     meas_data = shield.sensors.getLatestValue(I1_LOW);
     if (meas_data != NO_VALUE) I1_low_value = meas_data;
-
+    
     meas_data = shield.sensors.getLatestValue(V1_LOW);
     if (meas_data != NO_VALUE) V1_low_value = meas_data;
-
+    
     meas_data = shield.sensors.getLatestValue(V2_LOW);
     if (meas_data != NO_VALUE) V2_low_value = meas_data;
 
@@ -353,15 +357,37 @@ void loop_critical_task()
                 }
                 counter_ONOFF = 0;
             }
-            counter_ONOFF = counter_ONOFF + control_task_period;
+            counter_ONOFF += Ts;
         }
         if(seq_timer >= decalage_source + 0.13 && seq_timer < decalage_source + 0.22) // BLOCK
         {
             g=2;
+            counter_ONOFF = 0;
+            /*
+            //For testing logic
+            if(seq_timer >= decalage_source + 0.15 && !Vsource_turnoff_indicator)
+            {
+                V1_low_value=0;
+                Vsource_turnoff_indicator = true;
+            }
+            */
+            
         }
         if(seq_timer >= decalage_source + 0.22 && seq_timer < decalage_source + 0.25) // ON/OFF
         {
-            
+            g = seq_ON_OFF[ONOFF_index];
+            if (counter_ONOFF >= HF_period/2)
+            {
+                if (ONOFF_index == 1)
+                {
+                    ONOFF_index = 0;
+                }
+                else {
+                    ONOFF_index = 1;
+                }
+                counter_ONOFF = 0;
+            }
+            counter_ONOFF += Ts;
         }
         if(seq_timer >= decalage_source + 0.25 && seq_timer < decalage_source + 0.3) // BLOCK
         {
@@ -369,9 +395,9 @@ void loop_critical_task()
         }
         if(seq_timer >= decalage_source + 0.3)
         {
-            mode == IDLEMODE;
+            mode = IDLEMODE;
         }
-
+        
         if(g == 0) // SM is off
         {
             shield.power.setDutyCycle(LEG1,0.0);
@@ -398,7 +424,7 @@ void loop_critical_task()
             }
             pwm_enable = false;
         }            
-    
+        
         g_float = (float)g;
         /* Scope data acquisition */
         if (scope_timer == scope_period)
