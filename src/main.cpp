@@ -103,7 +103,7 @@ static uint8_t g = 2;
 static float32_t g_float;
 static float seq_timer = 0;
 static uint32_t critical_task_timer = 0;
-static const float32_t decalage_source = 0;
+static const float32_t decalage_source = 1;
 static bool Vsource_turnoff_indicator = false;
 static bool Vsource_ON_once_indicator = false;
 static uint8_t seq_ON_OFF[2] = {0, 1}; // Connection sequence for HF
