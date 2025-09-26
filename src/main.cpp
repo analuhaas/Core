@@ -95,7 +95,7 @@ static ScopeMimicry scope(NB_DATAS, 5);
 static bool is_downloading;
 static bool trigger = false;
 static uint32_t scope_timer = 0;
-static uint32_t scope_period = 2; // scope acquire data every t = scope_period (10) * critical_task_period (100 µs) = 1 ms;
+static uint32_t scope_period = 10; // scope acquire data every t = scope_period (10) * critical_task_period (100 µs) = 1 ms;
 
 /* SM switching variables */
 
@@ -103,14 +103,16 @@ static uint8_t g = 2;
 static float32_t g_float;
 static float seq_timer = 0;
 static uint32_t critical_task_timer = 0;
-static const float32_t decalage_source = 1;
+static const float32_t decalage_source = 0;
 static bool Vsource_turnoff_indicator = false;
 static bool Vsource_ON_once_indicator = false;
 static uint8_t seq_ON_OFF[2] = {0, 1}; // Connection sequence for HF
 static uint8_t ONOFF_index;
 static float counter_ONOFF;
-static float32_t f_sw_HF = 1000; // in Hz
+static float32_t f_sw_HF = 10000; // in Hz
 static float32_t HF_period = 1/f_sw_HF;
+//static float32_t HF_period = 0.0003;
+
 
 /*--------------------------------------------------------------- */
 
@@ -164,25 +166,28 @@ void dump_scope_datas(ScopeMimicry &scope)  {
 void setup_routine()
 {
     /* Buck voltage mode */
+    //shield.power.initBuck(LEG1);
     shield.power.initBuck(LEG1);
     shield.power.initBoost(LEG2);
 
     shield.sensors.enableDefaultTwistSensors();
+    //shield.power.disconnectCapacitor(ALL);
+    shield.power.connectCapacitor(LEG1);
+    shield.power.disconnectCapacitor(LEG2);
 
     /* Enable switch control with max and min duty cycle*/
     shield.power.setDutyCycleMax(ALL,1.0);
     shield.power.setDutyCycleMin(ALL,0.0);
 
     /* Configure scope channels, what measurelents do you want to acquire? */
-    scope.connectChannel(I1_low_value, "I_SM");
-    scope.connectChannel(V1_low_value, "V_SM");
+    scope.connectChannel(I1_low_value, "I1low");
+    scope.connectChannel(V1_low_value, "V1low");
     scope.connectChannel(g_float, "mode");
-    scope.connectChannel(seq_timer, "time"); // to verify if there is nothing
+    scope.connectChannel(seq_timer, "time"); 
     scope.connectChannel(V_high, "V_high"); // to verify capacitor voltage
     scope.set_trigger(&a_trigger);
     scope.set_delay(0.0F);
     scope.start();
-    //Vc_BTS indicates the bootstrap capacitor charge level, we have to measure it externally
 
     pid.init(pid_params);
 
@@ -256,11 +261,11 @@ void loop_application_task()
     }
     else if (mode == DECHARGEMODE)
     {
-        spin.led.turnOn();
+        //spin.led.turnOn();
     }
     else if (mode == SEQUENCEMODE)
     {
-        spin.led.toggle();
+        //spin.led.toggle();
     }
 
 
@@ -273,7 +278,7 @@ void loop_application_task()
         printk("%.3f:", (double)scope_timer);
         printk("%i:", mode);
         printk("\n");
-    task.suspendBackgroundMs(1000);
+    task.suspendBackgroundMs(10000);
 }
 
 /**
@@ -320,11 +325,18 @@ void loop_critical_task()
         }
         pwm_enable = false;
 
-        if (V1_low_value>=2 && !Vsource_ON_once_indicator) // If VDC is ON, starts sequence with small delay
+        if (V1_low_value<2) // If VDC is ON, starts sequence with small delay
+        {
+            Vsource_ON_once_indicator = false;
+        }
+
+        if (V1_low_value>=2 && Vsource_ON_once_indicator == false) // If VDC is ON, starts sequence with small delay
         {
             mode = SEQUENCEMODE;
             trigger = true;
             Vsource_ON_once_indicator = true;
+            seq_timer = 0;
+            counter_ONOFF = 0;
         }
     }
     else if (mode == DECHARGEMODE)
@@ -339,27 +351,15 @@ void loop_critical_task()
     else if (mode == SEQUENCEMODE)
     {
         
-        if(seq_timer >= decalage_source + 0 && seq_timer < decalage_source + 0.1) // BLOCK
+        if(seq_timer >= decalage_source + 0 && seq_timer < decalage_source + 0.35) // BLOCK
         {
             g=2;
         }
-        if(seq_timer >= decalage_source + 0.1 && seq_timer < decalage_source + 0.13) // ON/OFF
+        if(seq_timer >= decalage_source + 0.35 && seq_timer < decalage_source + 0.38) // ON/OFF
         {
             g = seq_ON_OFF[ONOFF_index];
-            if (counter_ONOFF >= HF_period/2)
-            {
-                if (ONOFF_index == 1)
-                {
-                    ONOFF_index = 0;
-                }
-                else {
-                    ONOFF_index = 1;
-                }
-                counter_ONOFF = 0;
-            }
-            counter_ONOFF += Ts;
         }
-        if(seq_timer >= decalage_source + 0.13 && seq_timer < decalage_source + 0.22) // BLOCK
+        if(seq_timer >= decalage_source + 0.38 && seq_timer < decalage_source + 0.8) // BLOCK
         {
             g=2;
             counter_ONOFF = 0;
@@ -373,27 +373,15 @@ void loop_critical_task()
             */
             
         }
-        if(seq_timer >= decalage_source + 0.22 && seq_timer < decalage_source + 0.25) // ON/OFF
+        if(seq_timer >= decalage_source + 0.8 && seq_timer < decalage_source + 0.83) // ON/OFF
         {
             g = seq_ON_OFF[ONOFF_index];
-            if (counter_ONOFF >= HF_period/2)
-            {
-                if (ONOFF_index == 1)
-                {
-                    ONOFF_index = 0;
-                }
-                else {
-                    ONOFF_index = 1;
-                }
-                counter_ONOFF = 0;
-            }
-            counter_ONOFF += Ts;
         }
-        if(seq_timer >= decalage_source + 0.25 && seq_timer < decalage_source + 0.3) // BLOCK
+        if(seq_timer >= decalage_source + 0.83 && seq_timer < decalage_source + 1) // BLOCK
         {
             g=2;
         }
-        if(seq_timer >= decalage_source + 0.3)
+        if(seq_timer >= decalage_source + 1)
         {
             mode = IDLEMODE;
         }
@@ -423,10 +411,24 @@ void loop_critical_task()
                 shield.power.stop(ALL);
             }
             pwm_enable = false;
-        }            
+        }           
         
-        g_float = (float)g;
+        //Pulse generator at HF frequency
+        if (counter_ONOFF >= HF_period/2 - Ts)
+        {
+            if (ONOFF_index == 1)
+            {
+                ONOFF_index = 0;
+            }
+            else {
+                ONOFF_index = 1;
+            }
+            counter_ONOFF = 0;
+        }
+        counter_ONOFF += Ts;
+        
         /* Scope data acquisition */
+        g_float = (float)g;
         if (scope_timer == scope_period)
         {
             scope.acquire();
