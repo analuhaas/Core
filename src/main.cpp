@@ -178,6 +178,7 @@ void setup_routine()
     /* Enable switch control with max and min duty cycle*/
     shield.power.setDutyCycleMax(ALL,1.0);
     shield.power.setDutyCycleMin(ALL,0.0);
+    spin.pwm.setFrequency(10000); // HF test frequency in Hz
 
     /* Configure scope channels, what measurelents do you want to acquire? */
     scope.connectChannel(I1_low_value, "I1low");
@@ -353,16 +354,28 @@ void loop_critical_task()
         
         if(seq_timer >= decalage_source + 0 && seq_timer < decalage_source + 0.35) // BLOCK
         {
-            g=2;
+            if (pwm_enable == true)
+            {
+                shield.power.stop(ALL);
+            }
+            pwm_enable = false;
         }
         if(seq_timer >= decalage_source + 0.35 && seq_timer < decalage_source + 0.38) // ON/OFF
         {
-            g = seq_ON_OFF[ONOFF_index];
+            shield.power.setDutyCycle(LEG1,0.5);
+            if (!pwm_enable)
+            {
+                pwm_enable = true;
+                shield.power.start(LEG1);
+            }
         }
         if(seq_timer >= decalage_source + 0.38 && seq_timer < decalage_source + 0.8) // BLOCK
         {
-            g=2;
-            counter_ONOFF = 0;
+            if (pwm_enable == true)
+            {
+                shield.power.stop(ALL);
+            }
+            pwm_enable = false;
             /*
             //For testing logic
             if(seq_timer >= decalage_source + 0.15 && !Vsource_turnoff_indicator)
@@ -375,43 +388,52 @@ void loop_critical_task()
         }
         if(seq_timer >= decalage_source + 0.8 && seq_timer < decalage_source + 0.83) // ON/OFF
         {
-            g = seq_ON_OFF[ONOFF_index];
+            shield.power.setDutyCycle(LEG1,0.5);
+            if (!pwm_enable)
+            {
+                pwm_enable = true;
+                shield.power.start(LEG1);
+            }
         }
         if(seq_timer >= decalage_source + 0.83 && seq_timer < decalage_source + 1) // BLOCK
-        {
-            g=2;
-        }
-        if(seq_timer >= decalage_source + 1)
-        {
-            mode = IDLEMODE;
-        }
-        
-        if(g == 0) // SM is off
-        {
-            shield.power.setDutyCycle(LEG1,0.0);
-            if (!pwm_enable)
-            {
-                pwm_enable = true;
-                shield.power.start(LEG1);
-            }
-        }
-        if(g == 1) // SM is on
-        {
-            shield.power.setDutyCycle(LEG1,1.0);
-            if (!pwm_enable)
-            {
-                pwm_enable = true;
-                shield.power.start(LEG1);
-            }
-        }            
-        if(g == 2) // SM is blocked
         {
             if (pwm_enable == true)
             {
                 shield.power.stop(ALL);
             }
             pwm_enable = false;
-        }           
+        }
+        if(seq_timer >= decalage_source + 1)
+        {
+            mode = IDLEMODE;
+        }
+        
+        // if(g == 0) // SM is off
+        // {
+        //     shield.power.setDutyCycle(LEG1,0.0);
+        //     if (!pwm_enable)
+        //     {
+        //         pwm_enable = true;
+        //         shield.power.start(LEG1);
+        //     }
+        // }
+        // if(g == 1) // SM is on
+        // {
+        //     shield.power.setDutyCycle(LEG1,1.0);
+        //     if (!pwm_enable)
+        //     {
+        //         pwm_enable = true;
+        //         shield.power.start(LEG1);
+        //     }
+        // }            
+        // if(g == 2) // SM is blocked
+        // {
+        //     if (pwm_enable == true)
+        //     {
+        //         shield.power.stop(ALL);
+        //     }
+        //     pwm_enable = false;
+        // }           
         
         //Pulse generator at HF frequency
         if (counter_ONOFF >= HF_period/2 - Ts)
