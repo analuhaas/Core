@@ -165,6 +165,7 @@ void dump_scope_datas(ScopeMimicry &scope)  {
  */
 void setup_routine()
 {
+    spin.pwm.initFixedFrequency(5000);
     /* Buck voltage mode */
     //shield.power.initBuck(LEG1);
     shield.power.initBuck(LEG1);
@@ -178,8 +179,7 @@ void setup_routine()
     /* Enable switch control with max and min duty cycle*/
     shield.power.setDutyCycleMax(ALL,1.0);
     shield.power.setDutyCycleMin(ALL,0.0);
-    spin.pwm.setFrequency(10000); // HF test frequency in Hz
-
+    //spin.pwm.setFrequency(5000); // HF test frequency in Hz
     /* Configure scope channels, what measurelents do you want to acquire? */
     scope.connectChannel(I1_low_value, "I1low");
     scope.connectChannel(V1_low_value, "V1low");
@@ -360,7 +360,7 @@ void loop_critical_task()
             }
             pwm_enable = false;
         }
-        if(seq_timer >= decalage_source + 0.35 && seq_timer < decalage_source + 0.38) // ON/OFF
+        if(seq_timer >= decalage_source + 0.35 && seq_timer < decalage_source + 0.41) // ON/OFF
         {
             shield.power.setDutyCycle(LEG1,0.5);
             if (!pwm_enable)
@@ -369,7 +369,7 @@ void loop_critical_task()
                 shield.power.start(LEG1);
             }
         }
-        if(seq_timer >= decalage_source + 0.38 && seq_timer < decalage_source + 0.8) // BLOCK
+        if(seq_timer >= decalage_source + 0.41 && seq_timer < decalage_source + 0.8) // BLOCK
         {
             if (pwm_enable == true)
             {
@@ -386,7 +386,7 @@ void loop_critical_task()
             */
             
         }
-        if(seq_timer >= decalage_source + 0.8 && seq_timer < decalage_source + 0.83) // ON/OFF
+        if(seq_timer >= decalage_source + 0.8 && seq_timer < decalage_source + 0.86) // ON/OFF
         {
             shield.power.setDutyCycle(LEG1,0.5);
             if (!pwm_enable)
@@ -395,7 +395,7 @@ void loop_critical_task()
                 shield.power.start(LEG1);
             }
         }
-        if(seq_timer >= decalage_source + 0.83 && seq_timer < decalage_source + 1) // BLOCK
+        if(seq_timer >= decalage_source + 0.86 && seq_timer < decalage_source + 1) // BLOCK
         {
             if (pwm_enable == true)
             {
