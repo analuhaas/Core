@@ -165,7 +165,7 @@ static float meas_data;
 
 /* Scope variables */
 static bool enable_acq; // Sets trigger moment if true
-static const uint16_t NB_DATAS = 1028; // Number of data acquired
+static const uint16_t NB_DATAS = 512; // Number of data acquired
 static ScopeMimicry scope(NB_DATAS, 10); // Scope configuration with 5 channels
 static bool is_downloading; // Records data if true
 
@@ -177,13 +177,13 @@ static uint32_t scope_timer = 0;
 static uint32_t scope_period = 1; // scope acquire data every t = scope_period * critical_task_period (100 µs) s;
 
 /* CVB variables */
-// static float32_t modules_capacitor_voltages_upper_arm[3] = {3.0,5.0,4.0}; // Upper arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
-static uint8_t modules_indexes_upper_arm[3] = {0,1,2}; // Upper arm modules indexes to be sorted with the capacitor voltage vector
-// static float32_t modules_capacitor_voltages_lower_arm[3] = {3.0,5.0,4.0}; // Lower arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
-static uint8_t modules_indexes_lower_arm[3] = {3,4,5}; // Lower arm modules indexes to be sorted with the capacitor voltage vector
+float32_t modules_capacitor_voltages_upper_arm[3] = {1.0,3.0,2.0}; // Upper arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
+uint8_t modules_indexes_upper_arm[3] = {0,1,2}; // Upper arm modules indexes to be sorted with the capacitor voltage vector
+float32_t modules_capacitor_voltages_lower_arm[3] = {1.0,3.0,2.0}; // Lower arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
+uint8_t modules_indexes_lower_arm[3] = {3,4,5}; // Lower arm modules indexes to be sorted with the capacitor voltage vector
 static uint8_t total_number_of_modules_arm= 3;
-static int8_t i_upper_arm= 1; // Upper arm current, to be substituted by measured current when implementing MMC
-static int8_t i_lower_arm= 1; // Lower arm current, to be substituted by measured current when implementing MMC
+int8_t i_upper_arm= 1; // Upper arm current, to be substituted by measured current when implementing MMC
+int8_t i_lower_arm= 1; // Lower arm current, to be substituted by measured current when implementing MMC
 
 /* Gate logic */
 uint8_t g[6] = {0,0,0,0,0,0}; // Gate signals to send to the modules (first 3 in upper arm and last 3 in lower arm)
@@ -287,7 +287,7 @@ void reception_function(void)
         {
             dataTX_mmc = dataRX_mmc; // Copy the received data to the transmission data
             dataTX_mmc.ID = module_ID;
-            // dataTX_mmc.Capacitor_Voltage = MMC_voltage; /* TODO :uncomment when we get the voltage */
+            dataTX_mmc.Capacitor_Voltage = V_high; /* TODO :uncomment when we get the voltage */
             if (mode == POWERMODE)
             {
                 memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
@@ -319,6 +319,8 @@ void setup_routine()
     task.createCritical(loop_critical_task, 100);
 
     shield.sensors.enableDefaultTwistSensors();
+    shield.power.disconnectCapacitor(LEG1);
+    shield.power.disconnectCapacitor(LEG2);
 
     /* Finally, start tasks */
     task.startBackground(background_task_number);
@@ -341,9 +343,9 @@ void setup_routine()
         scope.connectChannel(g_u_1, "g_u_1");
         scope.connectChannel(g_u_2, "g_u_2");
         scope.connectChannel(g_u_3, "g_u_3");
-        scope.connectChannel(g_l_1, "g_l_1");
-        scope.connectChannel(g_l_2, "g_l_2");
-        scope.connectChannel(g_l_3, "g_l_3");
+        scope.connectChannel(MMC_capacitor_voltage[0], "v_c_u_1");
+        scope.connectChannel(MMC_capacitor_voltage[1], "v_c_u_2");
+        scope.connectChannel(MMC_capacitor_voltage[2], "v_c_u_3");
         scope.set_trigger(&a_trigger);
         scope.set_delay(0.0F);
         scope.start();
@@ -426,30 +428,30 @@ void loop_background_task()
 /* Capacitor Voltage Balancing (CVB) algorithm implementation */
 void sorting()
 {
+    memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, 3 * sizeof(float32_t));
+    memcpy(modules_capacitor_voltages_lower_arm, &MMC_capacitor_voltage[3], 3 * sizeof(float32_t));
     uint8_t counter_loops_sorting = 0;
     while(counter_loops_sorting < 10){ // Sorts modules indexes according to capacitor voltage
             for(uint8_t counter = 0; counter < total_number_of_modules_arm-1; counter++)
             {
-                if(MMC_capacitor_voltage[counter] > MMC_capacitor_voltage[counter + 1])
+                if(modules_capacitor_voltages_upper_arm[counter] > modules_capacitor_voltages_upper_arm[counter + 1])
                 {
-                    float32_t temp = MMC_capacitor_voltage[counter];
-                    MMC_capacitor_voltage[counter] = MMC_capacitor_voltage[counter + 1];
-                    MMC_capacitor_voltage[counter + 1] = temp;
+                    float32_t temp = modules_capacitor_voltages_upper_arm[counter];
+                    modules_capacitor_voltages_upper_arm[counter] = modules_capacitor_voltages_upper_arm[counter + 1];
+                    modules_capacitor_voltages_upper_arm[counter + 1] = temp;
                     float32_t temp2 = modules_indexes_upper_arm[counter];
                     modules_indexes_upper_arm[counter] = modules_indexes_upper_arm[counter + 1];
                     modules_indexes_upper_arm[counter + 1] = temp2;
                 }
-            }
-            for(uint8_t counter = total_number_of_modules_arm; counter < 2*total_number_of_modules_arm-1; counter++)
-            {
-                if(MMC_capacitor_voltage[counter] > MMC_capacitor_voltage[counter + 1])
+
+                if(modules_capacitor_voltages_lower_arm[counter] > modules_capacitor_voltages_lower_arm[counter + 1])
                 {
-                    float32_t temp = MMC_capacitor_voltage[counter];
-                    MMC_capacitor_voltage[counter] = MMC_capacitor_voltage[counter + 1];
-                    MMC_capacitor_voltage[counter + 1] = temp;
-                    float32_t temp2 = modules_indexes_lower_arm[counter-total_number_of_modules_arm];
-                    modules_indexes_lower_arm[counter-total_number_of_modules_arm] = modules_indexes_lower_arm[counter-total_number_of_modules_arm + 1];
-                    modules_indexes_lower_arm[counter-total_number_of_modules_arm + 1] = temp2;
+                    float32_t temp = modules_capacitor_voltages_lower_arm[counter];
+                    modules_capacitor_voltages_lower_arm[counter] = modules_capacitor_voltages_lower_arm[counter + 1];
+                    modules_capacitor_voltages_lower_arm[counter + 1] = temp;
+                    float32_t temp2 = modules_indexes_lower_arm[counter];
+                    modules_indexes_lower_arm[counter] = modules_indexes_lower_arm[counter + 1];
+                    modules_indexes_lower_arm[counter + 1] = temp2;
                 }
             }
 
@@ -458,9 +460,9 @@ void sorting()
     g[0] = 0;
     g[1] = 0;
     g[2] = 0;
-    g[0] = 0;
-    g[1] = 0;
-    g[2] = 0;
+    g[3] = 0;
+    g[4] = 0;
+    g[5] = 0;
     
     for(uint8_t counter = 0; counter < total_number_of_modules_arm; counter++) // Choses the modules to connect according to sorted indexes
         {
@@ -575,21 +577,21 @@ void loop_critical_task()
             }
 
             /* Sets LED ON if gate command is 1 or OFF if gate command is 0 */
-            if (module_comand)
+            if (module_comand == 1)
             {
                 if (change_state_command)
                 {
                     Led_turnON_LL();
                     change_state_command = false; // Reset the flag
                 }
-                shield.power.setDutyCycle(LEG1,1.0);
-                if (!pwm_enable)
-                {
-                    pwm_enable = true;
-                    shield.power.start(LEG1);
-                }
+                // shield.power.setDutyCycle(LEG1,1.0);
+                // if (!pwm_enable)
+                // {
+                //     pwm_enable = true;
+                //     shield.power.start(LEG1);
+                // }
             }
-            else if (module_comand == 2)
+            if (module_comand == 2)
             {
                 if (change_state_command)
                 {
@@ -609,12 +611,12 @@ void loop_critical_task()
                     Led_turnOFF_LL();
                     change_state_command = false; // Reset the flag
                 }
-                shield.power.setDutyCycle(LEG1,0.0);
-                if (!pwm_enable)
-                {
-                    pwm_enable = true;
-                    shield.power.start(LEG1);
-                }
+                // shield.power.setDutyCycle(LEG1,0.0);
+                // if (!pwm_enable)
+                // {
+                //     pwm_enable = true;
+                //     shield.power.start(LEG1);
+                // }
             }
         }
         module_command_past = module_comand; // Update the past command
@@ -631,7 +633,6 @@ void loop_critical_task()
             send_idle = true; // Set the flag to send idle command to true, meaning that idle mode is active
         }
     }
-    dataTX_mmc.Capacitor_Voltage = V_high; /* TODO :verify with Ayoub if it is correct */
 }
 
 /**
