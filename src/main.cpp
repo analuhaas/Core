@@ -124,6 +124,8 @@ float32_t MMC_capacitor_voltage[6];
 uint8_t buffer_tx[7];
 uint8_t buffer_rx[7];
 
+float32_t Vdc = 48.0f;
+float32_t epsilon = 10.0f;
 float32_t MMC_voltage = 0.0f;
 
 uint32_t counter_receive = 0;
@@ -171,8 +173,10 @@ static bool is_downloading; // Records data if true
 
 /* SM switching variables */
 
-static float32_t number_of_connected_submodules_upper_arm;
-static float32_t number_of_connected_submodules_lower_arm;
+static float32_t number_of_connected_modules_upper_arm;
+static float32_t number_of_connected_modules_upper_arm_past;
+static float32_t number_of_connected_modules_lower_arm;
+static float32_t number_of_connected_modules_lower_arm_past;
 static uint32_t scope_timer = 0;
 static uint32_t scope_period = 1; // scope acquire data every t = scope_period * critical_task_period (100 µs) s;
 
@@ -186,9 +190,8 @@ int8_t i_upper_arm= 1; // Upper arm current, to be substituted by measured curre
 int8_t i_lower_arm= 1; // Lower arm current, to be substituted by measured current when implementing MMC
 
 /* Gate logic */
-uint8_t g[6] = {0,0,0,0,0,0}; // Gate signals to send to the modules (first 3 in upper arm and last 3 in lower arm)
-// uint8_t g_u[3] = {0,0,0}; // Gate signals to send to the upper modules
-// uint8_t g_l[3] = {0,0,0}; // Gate signals to send to the lower modules
+uint8_t g_u[3] = {0,0,0}; // Gate signals to send to the upper modules
+uint8_t g_l[3] = {0,0,0}; // Gate signals to send to the lower modules
 static float32_t g_u_1;
 static float32_t g_u_2;
 static float32_t g_u_3;
@@ -338,8 +341,8 @@ void setup_routine()
     {
         scope.connectChannel(modulation_signal_upper, "m_u");
         scope.connectChannel(modulation_signal_lower, "m_l");
-        scope.connectChannel(number_of_connected_submodules_upper_arm, "N_u");
-        scope.connectChannel(number_of_connected_submodules_lower_arm, "N_l");
+        scope.connectChannel(number_of_connected_modules_upper_arm, "N_u");
+        scope.connectChannel(number_of_connected_modules_lower_arm, "N_l");
         scope.connectChannel(g_u_1, "g_u_1");
         scope.connectChannel(g_u_2, "g_u_2");
         scope.connectChannel(g_u_3, "g_u_3");
@@ -413,8 +416,8 @@ void loop_background_task()
         if (mode == POWERMODE)
         {
             spin.led.toggle();
-            printk("%1.f:", number_of_connected_submodules_upper_arm);
-            printk("%1.f:", number_of_connected_submodules_lower_arm);
+            printk("%1.f:", number_of_connected_modules_upper_arm);
+            printk("%1.f:", number_of_connected_modules_lower_arm);
             printk("%u:", g_u_1);
             printk("%u:", g_u_2);
             printk("%u:", g_u_3);
@@ -430,6 +433,7 @@ void sorting()
 {
     memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, 3 * sizeof(float32_t));
     memcpy(modules_capacitor_voltages_lower_arm, &MMC_capacitor_voltage[3], 3 * sizeof(float32_t));
+
     uint8_t counter_loops_sorting = 0;
     while(counter_loops_sorting < 10){ // Sorts modules indexes according to capacitor voltage
             for(uint8_t counter = 0; counter < total_number_of_modules_arm-1; counter++)
@@ -457,40 +461,40 @@ void sorting()
 
             counter_loops_sorting++;
         }
-    g[0] = 0;
-    g[1] = 0;
-    g[2] = 0;
-    g[3] = 0;
-    g[4] = 0;
-    g[5] = 0;
+    g_u[0] = 0;
+    g_u[1] = 0;
+    g_u[2] = 0;
+    g_l[0] = 0;
+    g_l[1] = 0;
+    g_l[2] = 0;
     
     for(uint8_t counter = 0; counter < total_number_of_modules_arm; counter++) // Choses the modules to connect according to sorted indexes
         {
-            if(counter < number_of_connected_submodules_upper_arm)
+            if(counter < number_of_connected_modules_upper_arm)
                 {
                     if(i_upper_arm>=0)
                     {
                         uint8_t index_smallest_voltage_capacitor_upper_arm = modules_indexes_upper_arm[counter];
-                        g[index_smallest_voltage_capacitor_upper_arm] = 1;
+                        g_u[index_smallest_voltage_capacitor_upper_arm] = 1;
                     }
                     else{
                         uint8_t higher_index = total_number_of_modules_arm-1-counter;
                         uint8_t index_highest_voltage_capacitor_upper_arm = modules_indexes_upper_arm[higher_index];
-                        g[index_highest_voltage_capacitor_upper_arm] = 1;
+                        g_u[index_highest_voltage_capacitor_upper_arm] = 1;
                     }
 
                 }
-            if(counter < number_of_connected_submodules_lower_arm)
+            if(counter < number_of_connected_modules_lower_arm)
                 {
                     if(i_lower_arm>=0)
                     {
                         uint8_t index_smallest_voltage_capacitor_lower_arm = modules_indexes_lower_arm[counter];
-                        g[index_smallest_voltage_capacitor_lower_arm] = 1;
+                        g_l[index_smallest_voltage_capacitor_lower_arm] = 1;
                     }
                     else{
                         uint8_t higher_index = total_number_of_modules_arm-1-counter;
                         uint8_t index_highest_voltage_capacitor_lower_arm = modules_indexes_lower_arm[higher_index];
-                        g[index_highest_voltage_capacitor_lower_arm] = 1;
+                        g_l[index_highest_voltage_capacitor_lower_arm] = 1;
                     }
                 }
         }
@@ -513,17 +517,20 @@ void loop_critical_task()
     meas_data = shield.sensors.getLatestValue(I1_LOW);
     if (meas_data != NO_VALUE) I1_low_value = meas_data;
 
-    meas_data = shield.sensors.getLatestValue(V1_LOW);
-    if (meas_data != NO_VALUE) V1_low_value = meas_data;
-
-    meas_data = shield.sensors.getLatestValue(I_HIGH);
-    if (meas_data != NO_VALUE) I_high = meas_data;
-
     meas_data = shield.sensors.getLatestValue(V_HIGH);
     if (meas_data != NO_VALUE) V_high = meas_data;
 
     if (mode == POWERMODE)
     {
+        /* Protection according to capacitors voltages: if Vc_Mx >= Vdc/N + epsilon converter is put in idle mode */
+            for(uint8_t counter = 0; counter < total_number_of_modules_arm*2; counter++)
+            {
+                if (MMC_capacitor_voltage[counter] >= Vdc/total_number_of_modules_arm + epsilon) {
+                    mode = IDLEMODE;
+                    break; 
+                }
+            }
+
         /* The lead sends commands to the followers */
         if (module_ID == MMC_LEAD)
         {
@@ -536,19 +543,22 @@ void loop_critical_task()
             modulation_signal_upper = (a + m * ot_sin(angle)) / (2.0);
             modulation_signal_lower = (a - m * ot_sin(angle)) / (2.0);
 
-            number_of_connected_submodules_upper_arm = round(total_number_of_modules_arm*modulation_signal_upper); // recuperate for scope
-            number_of_connected_submodules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower); // recuperate for scope
+            number_of_connected_modules_upper_arm = round(total_number_of_modules_arm*modulation_signal_upper); // recuperate for scope
+            number_of_connected_modules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower); // recuperate for scope
 
-            sorting(); // Executes the CVB algorithm, chosing which modules to connect
+            if (number_of_connected_modules_upper_arm != number_of_connected_modules_upper_arm_past)
+            {
+                sorting(); // Executes the CVB algorithm, chosing which modules to connect
+            }
 
             /* Gate assignment with preference from CVB algorithm */
-            g_u_1 = (float)g[0];  // recuperate for scope acquisition
-            g_u_2 = (float)g[1];  // recuperate for scope acquisition
-            g_u_3 = (float)g[2];  // recuperate for scope acquisition
+            g_u_1 = (float)g_u[0];  // recuperate for scope acquisition
+            g_u_2 = (float)g_u[1];  // recuperate for scope acquisition
+            g_u_3 = (float)g_u[2];  // recuperate for scope acquisition
 
-            g_l_1 = (float)g[3];  // recuperate for scope acquisition
-            g_l_2 = (float)g[4];  // recuperate for scope acquisition
-            g_l_3 = (float)g[5];  // recuperate for scope acquisition
+            g_l_1 = (float)g_l[0];  // recuperate for scope acquisition
+            g_l_2 = (float)g_l[1];  // recuperate for scope acquisition
+            g_l_3 = (float)g_l[2];  // recuperate for scope acquisition
 
             /* Scope data acquisition */
             if (scope_timer == scope_period)
@@ -559,14 +569,17 @@ void loop_critical_task()
             scope_timer++;
 
             /* Set gate value to be sent to the modules */
-            SET_SIGNAL(dataTX_mmc.command, MMC_M1, g[0]);
-            SET_SIGNAL(dataTX_mmc.command, MMC_M2, g[1]);
-            SET_SIGNAL(dataTX_mmc.command, MMC_M3, g[2]);
+            SET_SIGNAL(dataTX_mmc.command, MMC_M1, g_u[0]);
+            SET_SIGNAL(dataTX_mmc.command, MMC_M2, g_u[1]);
+            SET_SIGNAL(dataTX_mmc.command, MMC_M3, g_u[2]);
 
             dataTX_mmc.ID = module_ID;
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
             dataTX_mmc.status = 1;
             communication.rs485.startTransmission(); // Starts message transmission to other boards
+
+            number_of_connected_modules_upper_arm_past = number_of_connected_modules_upper_arm;
+
         }
         else
         {
@@ -591,19 +604,19 @@ void loop_critical_task()
                 //     shield.power.start(LEG1);
                 // }
             }
-            if (module_comand == 2)
-            {
-                if (change_state_command)
-                {
-                    Led_turnOFF_LL();
-                    change_state_command = false; // Reset the flag
-                }
-                if (pwm_enable == true)
-                {
-                    shield.power.stop(ALL);
-                }
-                pwm_enable = false;
-            }
+            // if (module_comand == 2)
+            // {
+            //     if (change_state_command)
+            //     {
+            //         Led_turnOFF_LL();
+            //         change_state_command = false; // Reset the flag
+            //     }
+            //     if (pwm_enable == true)
+            //     {
+            //         shield.power.stop(ALL);
+            //     }
+            //     pwm_enable = false;
+            // }
             else
             {
                 if (change_state_command)
