@@ -503,6 +503,7 @@ static bool is_downloading; // Records data if true
 /* SM switching variables */
 
 static float32_t number_of_connected_submodules_upper_arm;
+static float32_t number_of_connected_submodules_upper_arm_past;
 static float32_t number_of_connected_submodules_lower_arm;
 static uint8_t seq_u[6] = {1, 2, 3, 2, 1, 0}; // Connection sequence for upper arm
 static uint8_t seq_l[6] = {2, 1, 0, 1, 2, 3}; // Connection sequence for lower arm
@@ -525,6 +526,7 @@ static int8_t i_lower_arm= -1; // Lower arm current, to be substituted by measur
 
 /* Gate logic */
 uint8_t g_u[3] = {0,0,0}; // Gate signals to send to the upper modules
+uint8_t g_u_past[3] = {0,0,0}; // Gate signals to send to the upper modules
 uint8_t g_l[3] = {0,0,0}; // Gate signals to send to the lower modules
 static float32_t g_u_1;
 static float32_t g_u_2;
@@ -905,10 +907,15 @@ void loop_critical_task()
             number_of_connected_submodules_upper_arm = round(total_number_of_modules_arm*modulation_signal_upper); // recuperate for scope
             number_of_connected_submodules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower); // recuperate for scope
 
-            memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, 3 * sizeof(float32_t));
-            // memcpy(modules_capacitor_voltages_lower_arm, &MMC_capacitor_voltage[3], 3 * sizeof(float32_t));
-
-            sorting(); // Executes the CVB algorithm, chosing which modules to connect
+            if(number_of_connected_submodules_upper_arm != number_of_connected_submodules_upper_arm_past)
+            {
+                memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, 3 * sizeof(float32_t));
+                sorting(); // Executes the CVB algorithm, chosing which modules to connect
+            }
+            if(number_of_connected_submodules_upper_arm == number_of_connected_submodules_upper_arm_past)
+            {
+                memcpy(g_u, g_u_past, 3 * sizeof(uint8_t));
+            }
 
             /* Gate assignment with preference from CVB algorithm */
             g_u_1 = (float)g_u[0];  // recuperate for scope acquisition
@@ -942,6 +949,8 @@ void loop_critical_task()
             mmc_frame_set_current_raw(dataTX_mmc, mmc_encode_current(Arm_current));
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
             communication.rs485.startTransmission();
+            number_of_connected_submodules_upper_arm_past = number_of_connected_submodules_upper_arm;
+            memcpy(g_u_past, g_u, 3 * sizeof(uint8_t));
         }
         else
         {
