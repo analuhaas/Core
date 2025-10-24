@@ -73,13 +73,25 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
-constexpr uint32_t UID_MMC_LEAD_BOARD = 0x00330054;
-constexpr uint32_t UID_MMC_SM1_BOARD = 0x0033004B;
-constexpr uint32_t UID_MMC_SM2_BOARD = 0x00330049;
-constexpr uint32_t UID_MMC_SM3_BOARD = 0x0033004C;
-constexpr uint32_t UID_MMC_SM4_BOARD = 0x11116666;
-constexpr uint32_t UID_MMC_SM5_BOARD = 0x11117777;
-constexpr uint32_t UID_MMC_SM6_BOARD = 0x11118888;
+// constexpr uint32_t UID_MMC_LEAD_BOARD = 0x00330054;
+// constexpr uint32_t UID_MMC_SM1_BOARD = 0x0033004B;
+// constexpr uint32_t UID_MMC_SM2_BOARD = 0x00330049;
+// constexpr uint32_t UID_MMC_SM3_BOARD = 0x0033004C;
+// constexpr uint32_t UID_MMC_SM4_BOARD = 0x0031001B;
+// constexpr uint32_t UID_MMC_SM5_BOARD = 0x003B004D;
+// constexpr uint32_t UID_MMC_SM6_BOARD = 0x002B002A;
+// constexpr uint32_t UID_MMC_SM7_BOARD = 0x11119999;
+// constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111AAA0;
+// constexpr uint32_t UID_MMC_SM9_BOARD = 0x1111BBB1;
+// constexpr uint32_t UID_MMC_SM10_BOARD = 0x1111CCC2;
+
+constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
+constexpr uint32_t UID_MMC_SM1_BOARD = 0x00330054;
+constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004B;
+constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
+constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
+constexpr uint32_t UID_MMC_SM5_BOARD = 0x0031001B;
+constexpr uint32_t UID_MMC_SM6_BOARD = 0x003B004D;
 constexpr uint32_t UID_MMC_SM7_BOARD = 0x11119999;
 constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111AAA0;
 constexpr uint32_t UID_MMC_SM9_BOARD = 0x1111BBB1;
@@ -494,6 +506,8 @@ static float32_t I1_low_value;
 static float32_t I2_low_value;
 static float32_t I_high;
 static float32_t V_high;
+static float32_t offset_iarm = 0.2;
+static float32_t step_offset = 0.01;
 
 static float32_t temp_1_value;
 static float32_t temp_2_value;
@@ -519,7 +533,7 @@ static uint32_t scope_timer = 0;
 // static uint32_t f_sw = 2; // 2 Hz = 0.5 s to transition;
 // static uint32_t sw_period = 1/(f_sw*control_task_period)*1000000; // 2 Hz = 0.5 s frequency to transition to next connection sequence value;
 static uint32_t sw_period = 1000; // 2 Hz = 0.5 s period to transition to next connection sequence value;
-static uint32_t scope_period = 1; // scope acquire data every t = scope_period * critical_task_period (100 µs) s;
+static uint32_t scope_period = 100; // scope acquire data every t = scope_period * critical_task_period (100 µs) s;
 
 /* CVB variables */
 static float32_t modules_capacitor_voltages_upper_arm[3] = {3.0,5.0,4.0}; // Upper arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
@@ -610,7 +624,7 @@ static void update_measurements(void)
     if (latest != NO_VALUE)
     {
         I1_low_value = latest;
-        Arm_current = -I1_low_value + 0.2;
+        Arm_current = -I1_low_value + offset_iarm;
     }
 }
 
@@ -766,6 +780,12 @@ void loop_communication_task()
     case 'a':
         enable_acq = !(enable_acq);
         break;
+    case 'u':
+        offset_iarm = offset_iarm + step_offset;
+        break;
+    case 'd':
+        offset_iarm = offset_iarm - step_offset;
+        break;
     default:
         break;
     }
@@ -802,8 +822,8 @@ void loop_background_task()
 /* Capacitor Voltage Balancing (CVB) algorithm implementation */
 void sorting()
 {
-    modules_indexes_upper_arm[0] = 0;
-    modules_indexes_upper_arm[1] = 1;
+    modules_indexes_upper_arm[0] = 1;
+    modules_indexes_upper_arm[1] = 0;
     modules_indexes_upper_arm[2] = 2;
     uint8_t counter_loops_sorting = 0;
     while(counter_loops_sorting < 10){ // Sorts modules indexes according to capacitor voltage

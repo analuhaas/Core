@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load the CSV file
-df = pd.read_csv('src/Data_records/2025-10-24_17-00-59-record.csv')
+df = pd.read_csv('src/Data_records/2025-10-24_17-38-28-record.csv')
 
 # Defina os períodos
 scope_period = 1  # exemplo, ajuste conforme o seu caso
