@@ -109,7 +109,7 @@ static bool Vsource_ON_once_indicator = false;
 static uint8_t seq_ON_OFF[2] = {0, 1}; // Connection sequence for HF
 static uint8_t ONOFF_index;
 static float counter_ONOFF;
-static float32_t f_sw_HF = 10000; // in Hz
+static float32_t f_sw_HF = 250; // in Hz
 static float32_t HF_period = 1/f_sw_HF;
 //static float32_t HF_period = 0.0003;
 
@@ -172,7 +172,7 @@ void setup_routine()
 
     shield.sensors.enableDefaultTwistSensors();
     //shield.power.disconnectCapacitor(ALL);
-    shield.power.connectCapacitor(LEG1);
+    shield.power.disconnectCapacitor(LEG1);
     shield.power.disconnectCapacitor(LEG2);
 
     /* Enable switch control with max and min duty cycle*/
@@ -414,17 +414,19 @@ void loop_critical_task()
         }           
         
         //Pulse generator at HF frequency
-        if (counter_ONOFF >= HF_period/2 - Ts)
+        if (counter_ONOFF <= HF_period/3 - Ts)
         {
-            if (ONOFF_index == 1)
-            {
-                ONOFF_index = 0;
-            }
-            else {
-                ONOFF_index = 1;
-            }
+            ONOFF_index = 0;
+        }
+        if (counter_ONOFF > HF_period/3 - Ts)
+        {
+            ONOFF_index = 1;
+        }
+        if (counter_ONOFF >= HF_period)
+        {
             counter_ONOFF = 0;
         }
+
         counter_ONOFF += Ts;
         
         /* Scope data acquisition */
