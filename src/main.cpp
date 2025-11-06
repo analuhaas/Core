@@ -70,14 +70,26 @@ constexpr uint8_t MMC_SM_COUNT = 10;
 constexpr uint8_t MMC_SM_FIRST = MMC_SM1;
 constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
+/* -------------- GENERAL MMC DEFINITIONS -------------------- */
+
+static const float f0 = 250.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
+static const uint8_t total_number_of_modules_arm = 1; //[-] Number of modules per arm
+constexpr float32_t Vcap_expected = 24.0F; //[V] Capacitor DC voltage expected during the test
+constexpr float32_t i_expected = 5.0F; //[A] Expected current amplitude during test
+constexpr float32_t overvoltage_tolerance = 40.0F; //[V] Set overvoltage tolerance
+constexpr float32_t overcurrent_tolerance = 10.0F; //[A] Set overcurrent tolerance
+
+
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
 constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
-constexpr uint32_t UID_MMC_SM1_BOARD = 0x00330054;
+// constexpr uint32_t UID_MMC_SM1_BOARD = 0x00330054;
+constexpr uint32_t UID_MMC_SM1_BOARD = 0x0031001B;
 constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004B;
 constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
 constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
-constexpr uint32_t UID_MMC_SM5_BOARD = 0x0031001B;
+// constexpr uint32_t UID_MMC_SM5_BOARD = 0x0031001B;
+constexpr uint32_t UID_MMC_SM5_BOARD = 0x00330054;
 constexpr uint32_t UID_MMC_SM6_BOARD = 0x11118888;
 constexpr uint32_t UID_MMC_SM7_BOARD = 0x11119999;
 constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111AAA0;
@@ -124,9 +136,9 @@ static uint8_t detect_module_id()
 
 /* -------------- DATA PACKING HELPERS ----------------------- */
 
-constexpr float32_t Cap_voltage_SCALE = 50.0F;
-constexpr float32_t Arm_current_SCALE = 50.0F;
-constexpr float32_t Arm_current_OFFSET = 25.0F;
+constexpr float32_t Cap_voltage_SCALE = Vcap_expected*2; //[V] Scale to transform voltage measurements sent to 1 byte (256 values)
+constexpr float32_t Arm_current_SCALE = i_expected*2; //[A] Scale to transform current measurements sent to 1 byte (256 values)
+constexpr float32_t Arm_current_OFFSET = i_expected; //[A] Offset to transform current measurements sent to 1 byte, used to allow positive and negative values with expected amplitude
 
 static inline uint16_t mmc_encode_voltage(float32_t voltage)
 {
@@ -497,7 +509,7 @@ static float meas_data;
 /* Scope variables */
 static bool enable_acq; // Sets trigger moment if true
 static const uint16_t NB_DATAS = 1028; // Number of data acquired
-static ScopeMimicry scope(NB_DATAS, 10); // Scope configuration with 5 channels
+static ScopeMimicry scope(NB_DATAS, 12); // Scope configuration with 5 channels
 static bool is_downloading; // Records data if true
 static uint32_t scope_timer = 0;
 static uint32_t scope_period = 1; // scope acquire data every t = scope_period * critical_task_period (100 µs) s;
@@ -507,7 +519,6 @@ static uint32_t scope_period = 1; // scope acquire data every t = scope_period *
 static uint8_t index_list[10] = {0,1,2,3,4,5,6,7,8,9}; // Upper arm modules indexes to be sorted with the capacitor voltage vector
 static float32_t number_of_connected_submodules_upper_arm;
 static float32_t number_of_connected_submodules_lower_arm;
-static const uint8_t total_number_of_modules_arm = 5;
 static float32_t modules_capacitor_voltages_upper_arm[total_number_of_modules_arm]; // Upper arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
 static uint8_t modules_indexes_upper_arm[total_number_of_modules_arm]; // Upper arm modules indexes to be sorted with the capacitor voltage vector
 static float32_t modules_capacitor_voltages_lower_arm[total_number_of_modules_arm]; // Lower arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
@@ -521,6 +532,8 @@ uint8_t g_l[total_number_of_modules_arm]; // Gate signals to send to the lower m
 static float32_t g_u_1;
 static float32_t g_u_2;
 static float32_t g_u_3;
+static float32_t g_u_4;
+static float32_t g_u_5;
 static float32_t g_l_1;
 static float32_t g_l_2;
 static float32_t g_l_3;
@@ -529,7 +542,6 @@ static float32_t g_l_3;
 static float32_t m = 1;
 static float32_t a = 1;
 static float32_t angle;
-static const float f0 = 250.F;
 static const float w0 = 2 * PI * f0;
 static float32_t Ts = control_task_period * 1e-6F;
 static float32_t modulation_signal_upper;
@@ -653,6 +665,20 @@ void reception_function(void)
                                       mmc_encode_voltage(Cap_voltage));
             mmc_frame_set_current_raw(dataTX_mmc,
                                       mmc_encode_current(Arm_current));
+            
+            /* Verifies overvoltage protection criteria */
+            if(Cap_voltage > Vcap_expected + overvoltage_tolerance)
+            {
+                mmc_frame_set_status_code(dataTX_mmc, OVER_VOLTAGE);
+            }
+            /* Verifies overcurrent protection criteria */
+            else if(Arm_current > i_expected + overcurrent_tolerance)
+            {
+                mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
+            }
+            else{
+                mmc_frame_set_status_code(dataTX_mmc, POWER);
+            }
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
             communication.rs485.startTransmission();
         }
@@ -687,6 +713,9 @@ void setup_routine()
 
     shield.sensors.enableDefaultTwistSensors();
 
+    shield.power.disconnectCapacitor(LEG1);
+    shield.power.disconnectCapacitor(LEG2);
+
     /* Finally, start tasks */
     task.startBackground(background_task_number);
     /* Uncomment following line if you use the critical task */
@@ -701,15 +730,17 @@ void setup_routine()
     if (master == true)
     {
         scope.connectChannel(modulation_signal_upper, "m_u");
-        scope.connectChannel(modulation_signal_lower, "m_l");
         scope.connectChannel(number_of_connected_submodules_upper_arm, "N_u");
-        scope.connectChannel(number_of_connected_submodules_lower_arm, "N_l");
         scope.connectChannel(g_u_1, "g_u_1");
         scope.connectChannel(g_u_2, "g_u_2");
         scope.connectChannel(g_u_3, "g_u_3");
+        scope.connectChannel(g_u_4, "g_u_4");
+        scope.connectChannel(g_u_5, "g_u_5");
         scope.connectChannel(MMC_capacitor_voltage[0], "v_c_1");
-        scope.connectChannel(MMC_capacitor_voltage[2], "v_c_2");
+        scope.connectChannel(MMC_capacitor_voltage[1], "v_c_2");
         scope.connectChannel(MMC_capacitor_voltage[2], "v_c_3");
+        scope.connectChannel(MMC_capacitor_voltage[3], "v_c_4");
+        scope.connectChannel(MMC_capacitor_voltage[4], "v_c_5");
         scope.set_trigger(&a_trigger);
         scope.set_delay(0.0F);
         scope.start();
@@ -851,10 +882,8 @@ void loop_critical_task()
             g_u_1 = (float)g_u[0];  // recuperate for scope acquisition
             g_u_2 = (float)g_u[1];  // recuperate for scope acquisition
             g_u_3 = (float)g_u[2];  // recuperate for scope acquisition
-
-            g_l_1 = (float)g_l[0];  // recuperate for scope acquisition
-            g_l_2 = (float)g_l[1];  // recuperate for scope acquisition
-            g_l_3 = (float)g_l[2];  // recuperate for scope acquisition
+            g_u_4 = (float)g_u[3];  // recuperate for scope acquisition
+            g_u_5 = (float)g_u[4];  // recuperate for scope acquisition
 
             /* Scope data acquisition */
             if (scope_timer == scope_period)
@@ -933,6 +962,11 @@ void loop_critical_task()
             communication.rs485.startTransmission();
             send_idle = true; // Set the flag to send idle command
         }
+        if (pwm_enable == true)
+        {
+            shield.power.stop(ALL);
+        }
+        pwm_enable = false;
     }
     counter_timer++;
 }
