@@ -35,6 +35,7 @@
 #include "TaskAPI.h"
 
 /*--------------OWNTECH Libraries----------------------------- */
+#include "trigo.h"
 #include "pid.h"
 #include "arm_math_types.h"
 #include <ScopeMimicry.h>
@@ -55,7 +56,6 @@ void loop_critical_task();
 
 /* [us] period of the control task */
 static uint32_t control_task_period = 100; // 100 µs
-static const float32_t Ts = control_task_period * 1e-6F;
 /* [bool] state of the PWM (ctrl task) */
 static bool pwm_enable = false;
 
@@ -75,17 +75,6 @@ static float32_t V_high;
 static float meas_data;
 
 float32_t duty_cycle = 0.3;
-
-
-/* PID coefficients for a 8.6ms step response*/
-static float32_t kp = 0.000215;
-static float32_t Ti = 7.5175e-5;
-static float32_t Td = 0.0;
-static float32_t N = 0.0;
-static float32_t upper_bound = 1.0F;
-static float32_t lower_bound = 0.0F;
-static PidParams pid_params(Ts, kp, Ti, Td, N, lower_bound, upper_bound);
-static Pid pid;
 
 /* Scope variables */
 
@@ -113,7 +102,14 @@ static float32_t f_sw_HF = 250; // in Hz
 static float32_t HF_period = 1/f_sw_HF;
 //static float32_t HF_period = 0.0003;
 
-
+/* NLM */
+static float32_t m = 1;
+static float32_t a = 1;
+static float32_t angle;
+static const float f0 = 250.F;
+static const float w0 = 2 * PI * f0;
+static float32_t Ts = control_task_period * 1e-6F;
+static float32_t modulation_signal_upper;
 /*--------------------------------------------------------------- */
 
 /* LIST OF POSSIBLE MODES FOR THE OWNTECH CONVERTER */
@@ -188,8 +184,6 @@ void setup_routine()
     scope.set_trigger(&a_trigger);
     scope.set_delay(0.0F);
     scope.start();
-
-    pid.init(pid_params);
 
     /* Then declare tasks */
     uint32_t app_task_number = task.createBackground(loop_application_task);
@@ -414,20 +408,13 @@ void loop_critical_task()
         }           
         
         //Pulse generator at HF frequency
-        if (counter_ONOFF <= HF_period/3 - Ts)
-        {
-            ONOFF_index = 0;
-        }
-        if (counter_ONOFF > HF_period/3 - Ts)
-        {
-            ONOFF_index = 1;
-        }
-        if (counter_ONOFF >= HF_period)
-        {
-            counter_ONOFF = 0;
-        }
+        /* Connection sequence from NLM */
+        angle += w0 * Ts;
+        angle = ot_modulo_2pi(angle);
+        m = 1;
+        modulation_signal_upper = (a + m * ot_sin(angle)) / (2.0);
 
-        counter_ONOFF += Ts;
+        ONOFF_index = round(modulation_signal_upper); // recuperate for scope
         
         /* Scope data acquisition */
         g_float = (float)g;
