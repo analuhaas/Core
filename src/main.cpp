@@ -546,6 +546,11 @@ static const float w0 = 2 * PI * f0;
 static float32_t Ts = control_task_period * 1e-6F;
 static float32_t modulation_signal_upper;
 static float32_t modulation_signal_lower;
+
+/* Com influence test */
+static uint32_t critical_task_timer; 
+static uint32_t off_time = 300000;  //equivalent to 30 s in critical task period
+
 /* --------------SETUP FUNCTIONS------------------------------- */
 
 /* Function to control the LEDs in the low level */
@@ -865,6 +870,7 @@ void loop_critical_task()
 
             dataTX_mmc.sm_insertion.raw = 0U;
 
+
             for (uint8_t counter = 0; counter < total_number_of_modules_arm; counter++) {
                 mmc_frame_set_sm_inserted(dataTX_mmc, MMC_SM1 + counter, g_u[counter] != 0U);
             }
@@ -895,6 +901,10 @@ void loop_critical_task()
         }
         else
         {
+            if(critical_task_timer >= off_time && module_comand == 0)
+            {
+                module_comand = 0;
+            }
             /* Verifies if command to be ON or OFF changed */
             if (module_comand != module_command_past)
             {
@@ -945,6 +955,7 @@ void loop_critical_task()
             }
         }
         module_command_past = module_comand; // Update the past command
+        critical_task_timer++;
     }
     else if (mode == IDLEMODE)
     {
