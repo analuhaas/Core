@@ -72,24 +72,26 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 /* -------------- GENERAL MMC DEFINITIONS -------------------- */
 
-static const float f0 = 250.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
-static const uint8_t total_number_of_modules_arm = 1; //[-] Number of modules per arm
+static const float f0 = 50.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
+static const uint8_t total_number_of_modules_arm = 5; //[-] Number of modules per arm
 constexpr float32_t Vcap_expected = 24.0F; //[V] Capacitor DC voltage expected during the test
 constexpr float32_t i_expected = 5.0F; //[A] Expected current amplitude during test
 constexpr float32_t overvoltage_tolerance = 40.0F; //[V] Set overvoltage tolerance
 constexpr float32_t overcurrent_tolerance = 10.0F; //[A] Set overcurrent tolerance
 
+/* Com influence test */
+static uint32_t critical_task_timer = 0; 
+static uint32_t off_time = 3000;  //equivalent to 3 s in critical task period
+static uint32_t off_time_delay = 40;  //equivalent to 1 s in critical task period
 
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
 constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
-// constexpr uint32_t UID_MMC_SM1_BOARD = 0x00330054;
-constexpr uint32_t UID_MMC_SM1_BOARD = 0x0031001B;
+constexpr uint32_t UID_MMC_SM1_BOARD = 0x00330054;
 constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004B;
 constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
 constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
-// constexpr uint32_t UID_MMC_SM5_BOARD = 0x0031001B;
-constexpr uint32_t UID_MMC_SM5_BOARD = 0x00330054;
+constexpr uint32_t UID_MMC_SM5_BOARD = 0x0031001B;
 constexpr uint32_t UID_MMC_SM6_BOARD = 0x11118888;
 constexpr uint32_t UID_MMC_SM7_BOARD = 0x11119999;
 constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111AAA0;
@@ -547,10 +549,6 @@ static float32_t Ts = control_task_period * 1e-6F;
 static float32_t modulation_signal_upper;
 static float32_t modulation_signal_lower;
 
-/* Com influence test */
-static uint32_t critical_task_timer; 
-static uint32_t off_time = 300000;  //equivalent to 30 s in critical task period
-
 /* --------------SETUP FUNCTIONS------------------------------- */
 
 /* Function to control the LEDs in the low level */
@@ -648,6 +646,11 @@ void reception_function(void)
             /* retrieving command from lead message*/
             module_comand = static_cast<uint8_t>(
                 mmc_frame_get_sm_inserted(dataRX_mmc, module_ID));
+
+            // if(critical_task_timer >= off_time && module_command_past == 0)
+            // {
+            //     module_comand = 0;
+            // }
             /* retrieving status */
             if (status_code == POWER)
             {
@@ -685,7 +688,12 @@ void reception_function(void)
                 mmc_frame_set_status_code(dataTX_mmc, POWER);
             }
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
+            // if(critical_task_timer >= off_time + off_time_delay)
+            // {
+            //     communication.rs485.startTransmission();
+            // }
             communication.rs485.startTransmission();
+            
         }
     }
     counter_receive++;
@@ -720,6 +728,10 @@ void setup_routine()
 
     shield.power.disconnectCapacitor(LEG1);
     shield.power.disconnectCapacitor(LEG2);
+
+    /* Enable switch control with max and min duty cycle*/
+    shield.power.setDutyCycleMax(ALL,1.0);
+    shield.power.setDutyCycleMin(ALL,0.0);
 
     /* Finally, start tasks */
     task.startBackground(background_task_number);
@@ -883,6 +895,11 @@ void loop_critical_task()
             mmc_frame_set_voltage_raw(dataTX_mmc, mmc_encode_voltage(Cap_voltage));
             mmc_frame_set_current_raw(dataTX_mmc, mmc_encode_current(Arm_current));
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
+
+            // if(critical_task_timer >= off_time + off_time_delay)
+            // {
+            //     communication.rs485.startTransmission();
+            // }
             communication.rs485.startTransmission();
 
             g_u_1 = (float)g_u[0];  // recuperate for scope acquisition
@@ -898,13 +915,11 @@ void loop_critical_task()
                 scope_timer = 0;
             }
             scope_timer++;
+            critical_task_timer++;
         }
         else
         {
-            if(critical_task_timer >= off_time && module_comand == 0)
-            {
-                module_comand = 0;
-            }
+            
             /* Verifies if command to be ON or OFF changed */
             if (module_comand != module_command_past)
             {
@@ -916,7 +931,6 @@ void loop_critical_task()
             {
                 if (change_state_command)
                 {
-                    Led_turnON_LL();
                     change_state_command = false; // Reset the flag
                 }
                 shield.power.setDutyCycle(LEG1,1.0);
@@ -930,7 +944,6 @@ void loop_critical_task()
             {
                 if (change_state_command)
                 {
-                    Led_turnOFF_LL();
                     change_state_command = false; // Reset the flag
                 }
                 if (pwm_enable == true)
@@ -943,7 +956,6 @@ void loop_critical_task()
             {
                 if (change_state_command)
                 {
-                    Led_turnOFF_LL();
                     change_state_command = false; // Reset the flag
                 }
                 shield.power.setDutyCycle(LEG1,0.0);
@@ -953,9 +965,10 @@ void loop_critical_task()
                     shield.power.start(LEG1);
                 }
             }
-        }
+            critical_task_timer++;
+        } 
         module_command_past = module_comand; // Update the past command
-        critical_task_timer++;
+
     }
     else if (mode == IDLEMODE)
     {
