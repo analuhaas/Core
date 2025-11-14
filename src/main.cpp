@@ -37,6 +37,7 @@
 #include "CommunicationAPI.h"
 
 /*--------------OWNTECH Libraries----------------------------- */
+#include "filters.h"
 #include "trigo.h"
 #include "pid.h"
 #include "pr.h"
@@ -72,7 +73,7 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 /* -------------- GENERAL MMC DEFINITIONS -------------------- */
 
-static const float f0 = 50.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
+static const float f0 = 250.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
 static const uint8_t total_number_of_modules_arm = 5; //[-] Number of modules per arm
 constexpr float32_t Vcap_expected = 24.0F; //[V] Capacitor DC voltage expected during the test
 constexpr float32_t i_expected = 5.0F; //[A] Expected current amplitude during test
@@ -511,7 +512,7 @@ static float meas_data;
 /* Scope variables */
 static bool enable_acq; // Sets trigger moment if true
 static const uint16_t NB_DATAS = 1028; // Number of data acquired
-static ScopeMimicry scope(NB_DATAS, 12); // Scope configuration with 5 channels
+static ScopeMimicry scope(NB_DATAS, 14); // Scope configuration with 5 channels
 static bool is_downloading; // Records data if true
 static uint32_t scope_timer = 0;
 static uint32_t scope_period = 1; // scope acquire data every t = scope_period * critical_task_period (100 µs) s;
@@ -521,6 +522,7 @@ static uint32_t scope_period = 1; // scope acquire data every t = scope_period *
 static uint8_t index_list[10] = {0,1,2,3,4,5,6,7,8,9}; // Upper arm modules indexes to be sorted with the capacitor voltage vector
 static float32_t number_of_connected_submodules_upper_arm;
 static float32_t number_of_connected_submodules_lower_arm;
+static float32_t number_of_connected_submodules_upper_arm_past = 0.0F;
 static float32_t modules_capacitor_voltages_upper_arm[total_number_of_modules_arm]; // Upper arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
 static uint8_t modules_indexes_upper_arm[total_number_of_modules_arm]; // Upper arm modules indexes to be sorted with the capacitor voltage vector
 static float32_t modules_capacitor_voltages_lower_arm[total_number_of_modules_arm]; // Lower arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
@@ -549,6 +551,10 @@ static float32_t Ts = control_task_period * 1e-6F;
 static float32_t modulation_signal_upper;
 static float32_t modulation_signal_lower;
 
+/* Current measurement filter */
+
+LowPassFirstOrderFilter i_low_filter(Ts, 200e-6F);
+static float32_t i_lowfilter_value;
 /* --------------SETUP FUNCTIONS------------------------------- */
 
 /* Function to control the LEDs in the low level */
@@ -758,6 +764,8 @@ void setup_routine()
         scope.connectChannel(MMC_capacitor_voltage[2], "v_c_3");
         scope.connectChannel(MMC_capacitor_voltage[3], "v_c_4");
         scope.connectChannel(MMC_capacitor_voltage[4], "v_c_5");
+        scope.connectChannel(MMC_arm_current[0], "i_u");
+        scope.connectChannel(i_lowfilter_value, "i_u_filtered");
         scope.set_trigger(&a_trigger);
         scope.set_delay(0.0F);
         scope.start();
@@ -833,6 +841,57 @@ void loop_background_task()
 
     task.suspendBackgroundMs(2000);
 }
+/* Capacitor Voltage Balancing (CVB) algorithm implementation */
+void sorting_upper_arm()
+{
+    memcpy(modules_indexes_upper_arm, index_list, total_number_of_modules_arm);
+    
+    uint8_t counter_loops_sorting = 0;
+    while(counter_loops_sorting < total_number_of_modules_arm + 1){ // Sorts modules indexes according to capacitor voltage
+            for(uint8_t counter = 0; counter < total_number_of_modules_arm-1; counter++)
+            {
+                if(modules_capacitor_voltages_upper_arm[counter] > modules_capacitor_voltages_upper_arm[counter + 1])
+                {
+                    float32_t temp = modules_capacitor_voltages_upper_arm[counter];
+                    modules_capacitor_voltages_upper_arm[counter] = modules_capacitor_voltages_upper_arm[counter + 1];
+                    modules_capacitor_voltages_upper_arm[counter + 1] = temp;
+                    float32_t temp2 = modules_indexes_upper_arm[counter];
+                    modules_indexes_upper_arm[counter] = modules_indexes_upper_arm[counter + 1];
+                    modules_indexes_upper_arm[counter + 1] = temp2;
+                }
+            }
+
+            counter_loops_sorting++;
+        }
+    
+    for(uint8_t counter = 0; counter < total_number_of_modules_arm; counter++) // Choses the modules to connect according to sorted indexes
+        {
+            if(i_upper_arm>=0)
+            {
+                uint8_t index_smallest_voltage_capacitor_upper_arm = modules_indexes_upper_arm[counter];
+                if(counter < number_of_connected_submodules_upper_arm)
+                {
+                    g_u[index_smallest_voltage_capacitor_upper_arm] = 1;
+                }
+                else{
+                    g_u[index_smallest_voltage_capacitor_upper_arm] = 0;
+                }
+            }
+            if(i_upper_arm<0)
+            {
+                uint8_t higher_index = total_number_of_modules_arm-1-counter;
+                uint8_t index_highest_voltage_capacitor_upper_arm = modules_indexes_upper_arm[higher_index];
+                if(counter < number_of_connected_submodules_upper_arm)
+                {
+                    g_u[index_highest_voltage_capacitor_upper_arm] = 1;
+                }
+                else{
+                    g_u[index_highest_voltage_capacitor_upper_arm] = 0;
+                }
+            }   
+        }
+
+}
 
 /**
  * Uncomment lines in setup_routine() to use critical task.
@@ -864,20 +923,18 @@ void loop_critical_task()
             number_of_connected_submodules_upper_arm = round(total_number_of_modules_arm*modulation_signal_upper); // recuperate for scope
             number_of_connected_submodules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower); // recuperate for scope
 
-            /* Gate assignment with preference order M1 > M2 > M3 */
+            /* Gate assignment with CVB */
+            if (number_of_connected_submodules_upper_arm != number_of_connected_submodules_upper_arm_past){
+                // delta_number_of_connected_submodules_upper_arm = number_of_connected_submodules_upper_arm - number_of_connected_submodules_upper_arm_past;
+                
+                memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, total_number_of_modules_arm * sizeof(float32_t));
 
-            for(uint8_t counter = 0; counter < total_number_of_modules_arm; counter++) // Choses the modules to connect according to chosen indexes
-            {
-                if(counter < number_of_connected_submodules_upper_arm)
-                {
-                    uint8_t index_smallest_voltage_capacitor_upper_arm = modules_indexes_upper_arm[counter];
-                    g_u[index_smallest_voltage_capacitor_upper_arm] = 1;
-                }
-                else{
-                    uint8_t index_smallest_voltage_capacitor_upper_arm = modules_indexes_upper_arm[counter];
-                    g_u[index_smallest_voltage_capacitor_upper_arm] = 0;
-                }
+                i_upper_arm = MMC_arm_current[0];
+                // i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
+                // i_upper_arm = i_lowfilter_value;
 
+                sorting_upper_arm(); // Executes the CVB algorithm, chosing which modules to connect
+                number_of_connected_submodules_upper_arm_past = number_of_connected_submodules_upper_arm;
             }
 
             dataTX_mmc.sm_insertion.raw = 0U;

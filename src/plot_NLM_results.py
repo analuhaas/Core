@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load the CSV file
-df = pd.read_csv('src/Data_records/2025-11-05_16-52-02-record.csv')
+df = pd.read_csv('src/Data_records/2025-11-14_17-30-31-record_60ohms_Rparallel_50Hz_imeasure_scale5A.csv')
 
 # Defina os períodos
 scope_period = 1  # exemplo, ajuste conforme o seu caso
@@ -32,8 +32,12 @@ v_c_3_filtered = df['v_c_3'][mask]
 v_c_4_filtered = df['v_c_4'][mask]
 v_c_5_filtered = df['v_c_5'][mask]
 
+# Dados do primeiro gráfico: i_u
+i_u_filtered = df['i_u'][mask]
+i_u_filtered_LP = df['i_u_filtered'][mask]
+
 # Cria os subplots
-fig, axs = plt.subplots(7, 1, figsize=(10, 10), sharex=True)
+fig, axs = plt.subplots(8, 1, figsize=(10, 10), sharex=True)
 
 # Subplot 1: N_u e N_l
 axs[0].plot(t_filtered, N_u_filtered, label='Nb of inserted modules N_on_u')
@@ -82,6 +86,13 @@ axs[6].plot(t_filtered, v_c_5_filtered, label='v_c_5', color='tab:purple')
 axs[6].set_ylabel('v_c [V]')
 axs[6].legend()
 axs[6].grid(True)
+
+# Subplot 7: g_u_1
+axs[7].plot(t_filtered, i_u_filtered, label='i_u', color='tab:blue')
+# axs[7].plot(t_filtered, i_u_filtered_LP, label='i_u_filtered', color='tab:orange')
+axs[7].set_ylabel('i [A]')
+axs[7].legend()
+axs[7].grid(True)
 
 # Ajusta layout
 plt.tight_layout()
