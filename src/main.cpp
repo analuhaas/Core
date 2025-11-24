@@ -73,10 +73,10 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 /* -------------- GENERAL MMC DEFINITIONS -------------------- */
 
-static const float f0 = 250.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
+static const float f0 = 50.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
 static const uint8_t total_number_of_modules_arm = 5; //[-] Number of modules per arm
 constexpr float32_t Vcap_expected = 24.0F; //[V] Capacitor DC voltage expected during the test
-constexpr float32_t i_expected = 5.0F; //[A] Expected current amplitude during test
+constexpr float32_t i_expected = 10.0F; //[A] Expected current amplitude during test
 constexpr float32_t overvoltage_tolerance = 40.0F; //[V] Set overvoltage tolerance
 constexpr float32_t overcurrent_tolerance = 10.0F; //[A] Set overcurrent tolerance
 
@@ -528,6 +528,11 @@ static uint8_t modules_indexes_upper_arm[total_number_of_modules_arm]; // Upper 
 static float32_t modules_capacitor_voltages_lower_arm[total_number_of_modules_arm]; // Lower arm modules capacitor voltages artificially generated, to be substituted by measured current when implementing MMC
 static uint8_t modules_indexes_lower_arm[total_number_of_modules_arm]; // Lower arm modules indexes to be sorted with the capacitor voltage vector
 static float32_t i_upper_arm= 1.0F; // Upper arm current, to be substituted by measured current when implementing MMC
+static float32_t i_upper_arm_1= 1.0F; // Upper arm current, to be substituted by measured current when implementing MMC
+static float32_t i_upper_arm_2= 1.0F; // Upper arm current, to be substituted by measured current when implementing MMC
+static float32_t i_upper_arm_3= 1.0F; // Upper arm current, to be substituted by measured current when implementing MMC
+static float32_t i_upper_arm_4= 1.0F; // Upper arm current, to be substituted by measured current when implementing MMC
+static float32_t i_upper_arm_0= 1.0F; // Upper arm current, to be substituted by measured current when implementing MMC
 static float32_t i_lower_arm= -1.0F; // Lower arm current, to be substituted by measured current when implementing MMC
 
 /* Gate logic */
@@ -923,13 +928,20 @@ void loop_critical_task()
             number_of_connected_submodules_upper_arm = round(total_number_of_modules_arm*modulation_signal_upper); // recuperate for scope
             number_of_connected_submodules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower); // recuperate for scope
 
+            i_upper_arm_4 = i_upper_arm_3;
+            i_upper_arm_3 = i_upper_arm_2;
+            i_upper_arm_2 = i_upper_arm_1;
+            i_upper_arm_1 = i_upper_arm;
+            i_upper_arm_0 = MMC_arm_current[0];
+            
             /* Gate assignment with CVB */
             if (number_of_connected_submodules_upper_arm != number_of_connected_submodules_upper_arm_past){
                 // delta_number_of_connected_submodules_upper_arm = number_of_connected_submodules_upper_arm - number_of_connected_submodules_upper_arm_past;
                 
                 memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, total_number_of_modules_arm * sizeof(float32_t));
 
-                i_upper_arm = MMC_arm_current[0];
+                i_upper_arm = (i_upper_arm_0 + i_upper_arm_1 + i_upper_arm_2 + i_upper_arm_3 + i_upper_arm_4)/5.0;
+                // i_upper_arm = MMC_arm_current[0];
                 // i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
                 // i_upper_arm = i_lowfilter_value;
 
