@@ -940,7 +940,7 @@ void loop_critical_task()
                 
                 memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, total_number_of_modules_arm * sizeof(float32_t));
 
-                i_upper_arm = (i_upper_arm_0 + i_upper_arm_1 + i_upper_arm_2 + i_upper_arm_3 + i_upper_arm_4)/5.0;
+                i_upper_arm = (i_upper_arm_0 + i_upper_arm_1 + i_upper_arm_2 + i_upper_arm_3 + i_upper_arm_4)/5;
                 // i_upper_arm = MMC_arm_current[0];
                 // i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
                 // i_upper_arm = i_lowfilter_value;
