@@ -73,12 +73,12 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 /* -------------- GENERAL MMC DEFINITIONS -------------------- */
 
-static const float f0 = 50.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
-static const uint8_t total_number_of_modules_arm = 5; //[-] Number of modules per arm
+static const float f0 = 100.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
+static const uint8_t total_number_of_modules_arm = 1; //[-] Number of modules per arm
 constexpr float32_t Vcap_expected = 24.0F; //[V] Capacitor DC voltage expected during the test
 constexpr float32_t i_expected = 5.0F; //[A] Expected current amplitude during test
-constexpr float32_t overvoltage_tolerance = 40.0F; //[V] Set overvoltage tolerance
-constexpr float32_t overcurrent_tolerance = 10.0F; //[A] Set overcurrent tolerance
+constexpr float32_t overvoltage_tolerance = 10.0F; //[V] Set overvoltage tolerance
+constexpr float32_t overcurrent_tolerance = 3.0F; //[A] Set overcurrent tolerance
 
 /* Com influence test */
 static uint32_t critical_task_timer = 0; 
@@ -140,8 +140,8 @@ static uint8_t detect_module_id()
 /* -------------- DATA PACKING HELPERS ----------------------- */
 
 constexpr float32_t Cap_voltage_SCALE = Vcap_expected*2; //[V] Scale to transform voltage measurements sent to 1 byte (256 values)
-constexpr float32_t Arm_current_SCALE = i_expected*2; //[A] Scale to transform current measurements sent to 1 byte (256 values)
-constexpr float32_t Arm_current_OFFSET = i_expected; //[A] Offset to transform current measurements sent to 1 byte, used to allow positive and negative values with expected amplitude
+constexpr float32_t Arm_current_SCALE = i_expected*4; //[A] Scale to transform current measurements sent to 1 byte (256 values)
+constexpr float32_t Arm_current_OFFSET = i_expected*2; //[A] Offset to transform current measurements sent to 1 byte, used to allow positive and negative values with expected amplitude
 
 static inline uint16_t mmc_encode_voltage(float32_t voltage)
 {
@@ -686,11 +686,11 @@ void reception_function(void)
             {
                 mmc_frame_set_status_code(dataTX_mmc, OVER_VOLTAGE);
             }
-            /* Verifies overcurrent protection criteria */
-            else if(Arm_current > i_expected + overcurrent_tolerance)
-            {
-                mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
-            }
+            // /* Verifies overcurrent protection criteria */
+            // else if(Arm_current > i_expected + overcurrent_tolerance)
+            // {
+            //     mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
+            // }
             else{
                 mmc_frame_set_status_code(dataTX_mmc, POWER);
             }
