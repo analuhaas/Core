@@ -73,7 +73,7 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 /* -------------- GENERAL MMC DEFINITIONS -------------------- */
 
-static const float f0 = 250.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
+static const float f0 = 50.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
 static const uint8_t total_number_of_modules_arm = 5; //[-] Number of modules per arm
 constexpr float32_t Vcap_expected = 24.0F; //[V] Capacitor DC voltage expected during the test
 constexpr float32_t i_expected = 5.0F; //[A] Expected current amplitude during test
@@ -553,7 +553,8 @@ static float32_t modulation_signal_lower;
 
 /* Current measurement filter */
 
-LowPassFirstOrderFilter i_low_filter(Ts, 200e-6F);
+LowPassFirstOrderFilter i_low_filter(Ts, 180e-6F);
+// NotchFilter i_low_filter(Ts,3000,2000);
 static float32_t i_lowfilter_value;
 /* --------------SETUP FUNCTIONS------------------------------- */
 
@@ -731,6 +732,10 @@ void setup_routine()
     task.createCritical(loop_critical_task, 100);
 
     shield.sensors.enableDefaultTwistSensors();
+
+    // shield.sensors.setConversionParametersLinear(I1_LOW,0.004634793,-9.873788182); //Calibration with different duty cycle values in Buck mode
+    // shield.sensors.setConversionParametersLinear(I1_LOW,0.004373188,-9.021091389); //Calibration with duty cycle = 1 by changing Vhigh in Buck mode
+    // shield.sensors.setConversionParametersLinear(I1_LOW,1,0); //Calibration programmed as module with connected state
 
     shield.power.disconnectCapacitor(LEG1);
     shield.power.disconnectCapacitor(LEG2);
@@ -923,15 +928,14 @@ void loop_critical_task()
             number_of_connected_submodules_upper_arm = round(total_number_of_modules_arm*modulation_signal_upper); // recuperate for scope
             number_of_connected_submodules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower); // recuperate for scope
 
+            i_upper_arm = MMC_arm_current[0];
+            i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
+            i_upper_arm = i_lowfilter_value;
             /* Gate assignment with CVB */
             if (number_of_connected_submodules_upper_arm != number_of_connected_submodules_upper_arm_past){
                 // delta_number_of_connected_submodules_upper_arm = number_of_connected_submodules_upper_arm - number_of_connected_submodules_upper_arm_past;
                 
                 memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, total_number_of_modules_arm * sizeof(float32_t));
-
-                i_upper_arm = MMC_arm_current[0];
-                // i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
-                // i_upper_arm = i_lowfilter_value;
 
                 sorting_upper_arm(); // Executes the CVB algorithm, chosing which modules to connect
                 number_of_connected_submodules_upper_arm_past = number_of_connected_submodules_upper_arm;

@@ -2,14 +2,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load the CSV file
-df = pd.read_csv('src/Data_records/2025-11-14_17-30-31-record_60ohms_Rparallel_50Hz_imeasure_scale5A.csv')
+df = pd.read_csv('src/Data_records/2025-12-09_18-15-14-record.csv')
 
 # Defina os períodos
 scope_period = 1  # exemplo, ajuste conforme o seu caso
 critical_task_period = 1e-6   # exemplo, ajuste conforme o seu caso
 
 # Filtra dados (os quatro gráficos usam a mesma filtragem)
-mask = (df.iloc[:, 0] > 0) & (df.iloc[:, 0] < 200)
+mask = (df.iloc[:, 0] > 0) & (df.iloc[:, 0] < 500)
 t_filtered = df.iloc[:, 0][mask] * scope_period * critical_task_period  # tempo em segundos
 
 # Dados do primeiro gráfico: m_u e m_l
@@ -89,7 +89,7 @@ axs[6].grid(True)
 
 # Subplot 7: g_u_1
 axs[7].plot(t_filtered, i_u_filtered, label='i_u', color='tab:blue')
-# axs[7].plot(t_filtered, i_u_filtered_LP, label='i_u_filtered', color='tab:orange')
+axs[7].plot(t_filtered, i_u_filtered_LP, label='i_u_filtered', color='tab:orange')
 axs[7].set_ylabel('i [A]')
 axs[7].legend()
 axs[7].grid(True)
