@@ -757,6 +757,7 @@ void setup_routine()
                                               /* Configure scope channels, what measurements do you want to acquire? */
     if (master == true)
     {
+        communication.sync.initMaster();
         scope.connectChannel(modulation_signal_upper, "m_u");
         scope.connectChannel(number_of_connected_submodules_upper_arm, "N_u");
         scope.connectChannel(g_u_1, "g_u_1");
@@ -777,6 +778,9 @@ void setup_routine()
 
         memcpy(modules_indexes_upper_arm, index_list, total_number_of_modules_arm);
         memcpy(modules_indexes_lower_arm, index_list, total_number_of_modules_arm);
+    }
+    else{
+        communication.sync.initSlave();
     }
 }
 
