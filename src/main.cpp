@@ -75,15 +75,13 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 static const float f0 = 100.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
 static const uint8_t total_number_of_modules_arm = 1; //[-] Number of modules per arm
-constexpr float32_t Vcap_expected = 24.0F; //[V] Capacitor DC voltage expected during the test
-constexpr float32_t i_expected = 5.0F; //[A] Expected current amplitude during test
-constexpr float32_t overvoltage_tolerance = 10.0F; //[V] Set overvoltage tolerance
-constexpr float32_t overcurrent_tolerance = 3.0F; //[A] Set overcurrent tolerance
+constexpr float32_t Vcap_scale = 80.0F; //[V] Capacitor DC voltage scale for byte conversion
+constexpr float32_t i_scale = 8.0F; //[A] Current amplitude scale for byte conversion
+constexpr float32_t overvoltage_tolerance = 30.0F; //[V] Set overvoltage tolerance
+constexpr float32_t overcurrent_tolerance = 8.0F; //[A] Set overcurrent tolerance
 
 /* Com influence test */
 static uint32_t critical_task_timer = 0; 
-static uint32_t off_time = 3000;  //equivalent to 3 s in critical task period
-static uint32_t off_time_delay = 40;  //equivalent to 1 s in critical task period
 
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
@@ -139,9 +137,9 @@ static uint8_t detect_module_id()
 
 /* -------------- DATA PACKING HELPERS ----------------------- */
 
-constexpr float32_t Cap_voltage_SCALE = Vcap_expected*2; //[V] Scale to transform voltage measurements sent to 1 byte (256 values)
-constexpr float32_t Arm_current_SCALE = i_expected*4; //[A] Scale to transform current measurements sent to 1 byte (256 values)
-constexpr float32_t Arm_current_OFFSET = i_expected*2; //[A] Offset to transform current measurements sent to 1 byte, used to allow positive and negative values with expected amplitude
+constexpr float32_t Cap_voltage_SCALE = Vcap_scale*2; //[V] Scale to transform voltage measurements sent to 1 byte (256 values)
+constexpr float32_t Arm_current_SCALE = i_scale*2; //[A] Scale to transform current measurements sent to 1 byte (256 values)
+constexpr float32_t Arm_current_OFFSET = i_scale; //[A] Offset to transform current measurements sent to 1 byte, used to allow positive and negative values with expected amplitude
 
 static inline uint16_t mmc_encode_voltage(float32_t voltage)
 {
@@ -556,6 +554,10 @@ static float32_t modulation_signal_lower;
 LowPassFirstOrderFilter i_low_filter(Ts, 180e-6F);
 // NotchFilter i_low_filter(Ts,3000,2000);
 static float32_t i_lowfilter_value;
+
+/* Protection */
+static float32_t self_protection_counter = 0;
+static bool start_self_protection = false;
 /* --------------SETUP FUNCTIONS------------------------------- */
 
 /* Function to control the LEDs in the low level */
@@ -682,17 +684,22 @@ void reception_function(void)
                                       mmc_encode_current(Arm_current));
             
             /* Verifies overvoltage protection criteria */
-            if(Cap_voltage > Vcap_expected + overvoltage_tolerance)
+            if(Cap_voltage > overvoltage_tolerance)
             {
                 mmc_frame_set_status_code(dataTX_mmc, OVER_VOLTAGE);
+                start_self_protection = true;
+                
             }
-            // /* Verifies overcurrent protection criteria */
-            // else if(Arm_current > i_expected + overcurrent_tolerance)
-            // {
-            //     mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
-            // }
+            /* Verifies overcurrent protection criteria */
+            else if(Arm_current > overcurrent_tolerance)
+            {
+                mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
+                start_self_protection = true;
+            }
             else{
                 mmc_frame_set_status_code(dataTX_mmc, POWER);
+                self_protection_counter = 0.0F;
+                start_self_protection = false;
             }
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
             // if(critical_task_timer >= off_time + off_time_delay)
@@ -984,7 +991,12 @@ void loop_critical_task()
         }
         else
         {
-            
+            // if(start_self_protection == true){
+            //     self_protection_counter += Ts;
+            //     if(self_protection_counter >= 1.0F){
+            //         mode = IDLEMODE;
+            //     }
+            // }
             /* Verifies if command to be ON or OFF changed */
             if (module_comand != module_command_past)
             {
