@@ -77,7 +77,7 @@ static const float f0 = 100.F; //[Hz] Output frequency used to generate the sinu
 static const uint8_t total_number_of_modules_arm = 1; //[-] Number of modules per arm
 constexpr float32_t Vcap_scale = 80.0F; //[V] Capacitor DC voltage scale for byte conversion
 constexpr float32_t i_scale = 8.0F; //[A] Current amplitude scale for byte conversion
-constexpr float32_t overvoltage_tolerance = 30.0F; //[V] Set overvoltage tolerance
+constexpr float32_t overvoltage_tolerance = 20.0F; //[V] Set overvoltage tolerance
 constexpr float32_t overcurrent_tolerance = 8.0F; //[A] Set overcurrent tolerance
 
 /* Com influence test */
@@ -698,8 +698,8 @@ void reception_function(void)
             }
             else{
                 mmc_frame_set_status_code(dataTX_mmc, POWER);
-                self_protection_counter = 0.0F;
-                start_self_protection = false;
+                // self_protection_counter = 0.0F;
+                // start_self_protection = false;
             }
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
             // if(critical_task_timer >= off_time + off_time_delay)
@@ -991,57 +991,60 @@ void loop_critical_task()
         }
         else
         {
-            // if(start_self_protection == true){
-            //     self_protection_counter += Ts;
-            //     if(self_protection_counter >= 1.0F){
-            //         mode = IDLEMODE;
-            //     }
-            // }
-            /* Verifies if command to be ON or OFF changed */
-            if (module_comand != module_command_past)
-            {
-                change_state_command = true; // Set the flag to change the state
+            if(start_self_protection == true){
+                self_protection_counter += Ts;
+                if(self_protection_counter >= 1.0F){
+                    mode = IDLEMODE;
+                }
             }
+            else{
+                /* Verifies if command to be ON or OFF changed */
+                if (module_comand != module_command_past)
+                {
+                    change_state_command = true; // Set the flag to change the state
+                }
 
-            /* Sets LED ON if gate command is 1 or OFF if gate command is 0 */
-            if (module_comand)
-            {
-                if (change_state_command)
+                /* Sets LED ON if gate command is 1 or OFF if gate command is 0 */
+                if (module_comand)
                 {
-                    change_state_command = false; // Reset the flag
+                    if (change_state_command)
+                    {
+                        change_state_command = false; // Reset the flag
+                    }
+                    shield.power.setDutyCycle(LEG1,1.0);
+                    if (!pwm_enable)
+                    {
+                        pwm_enable = true;
+                        shield.power.start(LEG1);
+                    }
                 }
-                shield.power.setDutyCycle(LEG1,1.0);
-                if (!pwm_enable)
+                else if (module_comand == 2)
                 {
-                    pwm_enable = true;
-                    shield.power.start(LEG1);
+                    if (change_state_command)
+                    {
+                        change_state_command = false; // Reset the flag
+                    }
+                    if (pwm_enable == true)
+                    {
+                        shield.power.stop(ALL);
+                    }
+                    pwm_enable = false;
+                }
+                else
+                {
+                    if (change_state_command)
+                    {
+                        change_state_command = false; // Reset the flag
+                    }
+                    shield.power.setDutyCycle(LEG1,0.0);
+                    if (!pwm_enable)
+                    {
+                        pwm_enable = true;
+                        shield.power.start(LEG1);
+                    }
                 }
             }
-            else if (module_comand == 2)
-            {
-                if (change_state_command)
-                {
-                    change_state_command = false; // Reset the flag
-                }
-                if (pwm_enable == true)
-                {
-                    shield.power.stop(ALL);
-                }
-                pwm_enable = false;
-            }
-            else
-            {
-                if (change_state_command)
-                {
-                    change_state_command = false; // Reset the flag
-                }
-                shield.power.setDutyCycle(LEG1,0.0);
-                if (!pwm_enable)
-                {
-                    pwm_enable = true;
-                    shield.power.start(LEG1);
-                }
-            }
+            
             critical_task_timer++;
         } 
         module_command_past = module_comand; // Update the past command
