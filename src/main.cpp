@@ -79,6 +79,7 @@ constexpr float32_t Vcap_scale = 80.0F; //[V] Capacitor DC voltage scale for byt
 constexpr float32_t i_scale = 8.0F; //[A] Current amplitude scale for byte conversion
 constexpr float32_t overvoltage_tolerance = 20.0F; //[V] Set overvoltage tolerance
 constexpr float32_t overcurrent_tolerance = 8.0F; //[A] Set overcurrent tolerance
+static float32_t self_protection_time = 1.0F;
 
 /* Com influence test */
 static uint32_t critical_task_timer = 0; 
@@ -993,7 +994,7 @@ void loop_critical_task()
         {
             if(start_self_protection == true){
                 self_protection_counter += Ts;
-                if(self_protection_counter >= 1.0F){
+                if(self_protection_counter >= self_protection_time){
                     mode = IDLEMODE;
                 }
             }
