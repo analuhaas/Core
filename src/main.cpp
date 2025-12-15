@@ -117,11 +117,12 @@ void setup_routine()
 
     shield.sensors.enableDefaultTwistSensors();
 
+    shield.power.disconnectCapacitor(LEG1);
+    shield.power.disconnectCapacitor(LEG2);
+    
     /* Enable switch control with max and min duty cycle*/
     shield.power.setDutyCycleMax(ALL,1.0);
     shield.power.setDutyCycleMin(ALL,0.0);
-
-    pid.init(pid_params);
 
     shield.sensors.setConversionParametersLinear(V_HIGH, 1,0);
     shield.sensors.setConversionParametersLinear(V1_LOW, 1,0);
@@ -255,14 +256,11 @@ void loop_critical_task()
     }
     else if (mode == POWERMODE)
     {
-        // duty_cycle = pid.calculateWithReturn(voltage_reference, V1_low_value);
-        shield.power.setDutyCycle(ALL,duty_cycle);
-
-        /* Set POWER ON */
+        shield.power.setDutyCycle(LEG1,1.0);
         if (!pwm_enable)
         {
             pwm_enable = true;
-            shield.power.start(ALL);
+            shield.power.start(LEG1);
         }
     }
 
