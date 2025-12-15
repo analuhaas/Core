@@ -735,7 +735,7 @@ void setup_routine()
 
     // shield.sensors.setConversionParametersLinear(I1_LOW,0.004634793,-9.873788182); //Calibration with different duty cycle values in Buck mode
     // shield.sensors.setConversionParametersLinear(I1_LOW,0.004373188,-9.021091389); //Calibration with duty cycle = 1 by changing Vhigh in Buck mode
-    // shield.sensors.setConversionParametersLinear(I1_LOW,1,0); //Calibration programmed as module with connected state
+    // shield.sensors.setConversionParametersLinear(I1_LOW,0.004533395,-9.733253698); //Calibration programmed as module with connected state
 
     shield.power.disconnectCapacitor(LEG1);
     shield.power.disconnectCapacitor(LEG2);
