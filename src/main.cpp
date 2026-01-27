@@ -75,15 +75,10 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 static const float f0 = 50.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
 static const uint8_t total_number_of_modules_arm = 5; //[-] Number of modules per arm
-constexpr float32_t Vcap_expected = 24.0F; //[V] Capacitor DC voltage expected during the test
-constexpr float32_t i_expected = 5.0F; //[A] Expected current amplitude during test
-constexpr float32_t overvoltage_tolerance = 40.0F; //[V] Set overvoltage tolerance
-constexpr float32_t overcurrent_tolerance = 10.0F; //[A] Set overcurrent tolerance
-
-/* Com influence test */
-static uint32_t critical_task_timer = 0; 
-static uint32_t off_time = 3000;  //equivalent to 3 s in critical task period
-static uint32_t off_time_delay = 40;  //equivalent to 1 s in critical task period
+constexpr float32_t Vcap_expected = 80.0F; //[V] Capacitor DC voltage expected during the test
+constexpr float32_t i_expected = 10.0F; //[A] Expected current amplitude during test
+constexpr float32_t overvoltage_tolerance = 80.0F; //[V] Set overvoltage tolerance
+constexpr float32_t overcurrent_tolerance = 8.0F; //[A] Set overcurrent tolerance
 
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
@@ -494,6 +489,8 @@ static uint32_t control_task_period = 100; // 100 µs
 /* [bool] state of the PWM (ctrl task) */
 static bool pwm_enable = false;
 
+static uint32_t critical_task_timer = 0; 
+
 /* Measure variables */
 
 static float32_t V1_low_value;
@@ -554,7 +551,6 @@ static float32_t modulation_signal_lower;
 /* Current measurement filter */
 
 LowPassFirstOrderFilter i_low_filter(Ts, 180e-6F);
-// NotchFilter i_low_filter(Ts,3000,2000);
 static float32_t i_lowfilter_value;
 /* --------------SETUP FUNCTIONS------------------------------- */
 
@@ -654,10 +650,6 @@ void reception_function(void)
             module_comand = static_cast<uint8_t>(
                 mmc_frame_get_sm_inserted(dataRX_mmc, module_ID));
 
-            // if(critical_task_timer >= off_time && module_command_past == 0)
-            // {
-            //     module_comand = 0;
-            // }
             /* retrieving status */
             if (status_code == POWER)
             {
@@ -682,12 +674,12 @@ void reception_function(void)
                                       mmc_encode_current(Arm_current));
             
             /* Verifies overvoltage protection criteria */
-            if(Cap_voltage > Vcap_expected + overvoltage_tolerance)
+            if(Cap_voltage > overvoltage_tolerance)
             {
                 mmc_frame_set_status_code(dataTX_mmc, OVER_VOLTAGE);
             }
             /* Verifies overcurrent protection criteria */
-            else if(Arm_current > i_expected + overcurrent_tolerance)
+            else if(Arm_current > overcurrent_tolerance)
             {
                 mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
             }
@@ -695,10 +687,7 @@ void reception_function(void)
                 mmc_frame_set_status_code(dataTX_mmc, POWER);
             }
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
-            // if(critical_task_timer >= off_time + off_time_delay)
-            // {
-            //     communication.rs485.startTransmission();
-            // }
+
             communication.rs485.startTransmission();
             
         }
@@ -937,7 +926,6 @@ void loop_critical_task()
             i_upper_arm = i_lowfilter_value;
             /* Gate assignment with CVB */
             if (number_of_connected_submodules_upper_arm != number_of_connected_submodules_upper_arm_past){
-                // delta_number_of_connected_submodules_upper_arm = number_of_connected_submodules_upper_arm - number_of_connected_submodules_upper_arm_past;
                 
                 memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, total_number_of_modules_arm * sizeof(float32_t));
 
@@ -961,10 +949,6 @@ void loop_critical_task()
             mmc_frame_set_current_raw(dataTX_mmc, mmc_encode_current(Arm_current));
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
 
-            // if(critical_task_timer >= off_time + off_time_delay)
-            // {
-            //     communication.rs485.startTransmission();
-            // }
             communication.rs485.startTransmission();
 
             g_u_1 = (float)g_u[0];  // recuperate for scope acquisition
