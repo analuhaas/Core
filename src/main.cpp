@@ -83,16 +83,29 @@ constexpr float32_t overcurrent_tolerance = 8.0F; //[A] Set overcurrent toleranc
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
 constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
-constexpr uint32_t UID_MMC_SM1_BOARD = 0x00330054;
-constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004B;
-constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
-constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
-constexpr uint32_t UID_MMC_SM5_BOARD = 0x0031001B;
-constexpr uint32_t UID_MMC_SM6_BOARD = 0x11118888;
-constexpr uint32_t UID_MMC_SM7_BOARD = 0x11119999;
-constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111AAA0;
-constexpr uint32_t UID_MMC_SM9_BOARD = 0x1111BBB1;
-constexpr uint32_t UID_MMC_SM10_BOARD = 0x1111CCC2;
+constexpr uint32_t UID_MMC_SM1_BOARD = 0x0033004B;
+constexpr uint32_t UID_MMC_SM2_BOARD = 0x00330049;
+constexpr uint32_t UID_MMC_SM3_BOARD = 0x0033004C;
+constexpr uint32_t UID_MMC_SM4_BOARD = 0x0031001B;
+constexpr uint32_t UID_MMC_SM5_BOARD = 0x00330054;
+constexpr uint32_t UID_MMC_SM6_BOARD = 0x11119999;
+constexpr uint32_t UID_MMC_SM7_BOARD = 0x1111AAA0;
+constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111BBB1;
+constexpr uint32_t UID_MMC_SM9_BOARD = 0x1111CCC2;
+constexpr uint32_t UID_MMC_SM10_BOARD = 0x1111CCC3;
+
+
+// constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
+// constexpr uint32_t UID_MMC_SM1_BOARD = 0x00330054;
+// constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004B;
+// constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
+// constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
+// constexpr uint32_t UID_MMC_SM5_BOARD = 0x0031001B;
+// constexpr uint32_t UID_MMC_SM6_BOARD = 0x11118888;
+// constexpr uint32_t UID_MMC_SM7_BOARD = 0x11119999;
+// constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111AAA0;
+// constexpr uint32_t UID_MMC_SM9_BOARD = 0x1111BBB1;
+// constexpr uint32_t UID_MMC_SM10_BOARD = 0x1111CCC2;
 
 static uint32_t read_board_uid()
 {
@@ -552,6 +565,12 @@ static float32_t modulation_signal_lower;
 
 LowPassFirstOrderFilter i_low_filter(Ts, 180e-6F);
 static float32_t i_lowfilter_value;
+
+/* Oscillations treatment */
+float32_t duty_cycle = 1.0; // Duty cycle to be used during connected states
+static float32_t duty_cycle_ramp[4] = {0.25,0.5,0.75,1.0}; // Duty cycle ramp in 4 levels to reduce oscillations
+uint32_t duty_cycle_counter = 0;
+
 /* --------------SETUP FUNCTIONS------------------------------- */
 
 /* Function to control the LEDs in the low level */
@@ -676,12 +695,14 @@ void reception_function(void)
             /* Verifies overvoltage protection criteria */
             if(Cap_voltage > overvoltage_tolerance)
             {
-                mmc_frame_set_status_code(dataTX_mmc, OVER_VOLTAGE);
+                // mmc_frame_set_status_code(dataTX_mmc, OVER_VOLTAGE);
+                mmc_frame_set_status_code(dataTX_mmc, POWER);
             }
             /* Verifies overcurrent protection criteria */
             else if(Arm_current > overcurrent_tolerance)
             {
-                mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
+                // mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
+                mmc_frame_set_status_code(dataTX_mmc, POWER);
             }
             else{
                 mmc_frame_set_status_code(dataTX_mmc, POWER);
@@ -968,11 +989,11 @@ void loop_critical_task()
         }
         else
         {
-            
             /* Verifies if command to be ON or OFF changed */
             if (module_comand != module_command_past)
             {
                 change_state_command = true; // Set the flag to change the state
+                duty_cycle_counter = 0;
             }
 
             /* Sets LED ON if gate command is 1 or OFF if gate command is 0 */
@@ -982,7 +1003,12 @@ void loop_critical_task()
                 {
                     change_state_command = false; // Reset the flag
                 }
-                shield.power.setDutyCycle(LEG1,1.0);
+                if (duty_cycle != duty_cycle_ramp[3])
+                {
+                    duty_cycle = duty_cycle_ramp[duty_cycle_counter];
+                    duty_cycle_counter++;
+                }
+                shield.power.setDutyCycle(LEG1,duty_cycle);
                 if (!pwm_enable)
                 {
                     pwm_enable = true;
