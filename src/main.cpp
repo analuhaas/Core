@@ -83,10 +83,10 @@ constexpr float32_t overcurrent_tolerance = 8.0F; //[A] Set overcurrent toleranc
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
 constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
-constexpr uint32_t UID_MMC_SM1_BOARD = 0x0033004B;
-constexpr uint32_t UID_MMC_SM2_BOARD = 0x00330049;
-constexpr uint32_t UID_MMC_SM3_BOARD = 0x0033004C;
-constexpr uint32_t UID_MMC_SM4_BOARD = 0x0031001B;
+constexpr uint32_t UID_MMC_SM1_BOARD = 0x0031001B;
+constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004B;
+constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
+constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
 constexpr uint32_t UID_MMC_SM5_BOARD = 0x00330054;
 constexpr uint32_t UID_MMC_SM6_BOARD = 0x11119999;
 constexpr uint32_t UID_MMC_SM7_BOARD = 0x1111AAA0;
@@ -567,8 +567,11 @@ LowPassFirstOrderFilter i_low_filter(Ts, 180e-6F);
 static float32_t i_lowfilter_value;
 
 /* Oscillations treatment */
-float32_t duty_cycle = 1.0; // Duty cycle to be used during connected states
-static float32_t duty_cycle_ramp[4] = {0.25,0.5,0.75,1.0}; // Duty cycle ramp in 4 levels to reduce oscillations
+static float32_t duty_cycle = 1.0; // Duty cycle to be used during connected states
+// static float32_t duty_cycle_ramp_up[4] = {0.25,0.5,0.75,0.95}; // Duty cycle ramp in 4 levels to reduce oscillations
+// static float32_t duty_cycle_ramp_down[4] = {0.75,0.5,0.25,0.0}; // Duty cycle ramp in 4 levels to reduce oscillations
+static float32_t duty_cycle_ramp_up[12] = {0.25,0.25,0.25,0.5,0.5,0.5,0.75,0.75,0.75,0.95,0.95,0.95}; // Duty cycle ramp in 4 levels to reduce oscillations
+static float32_t duty_cycle_ramp_down[12] = {0.75,0.75,0.75,0.5,0.5,0.5,0.25,0.25,0.25,0.0,0.0,0.0}; // Duty cycle ramp in 4 levels to reduce oscillations
 uint32_t duty_cycle_counter = 0;
 
 /* --------------SETUP FUNCTIONS------------------------------- */
@@ -1003,9 +1006,9 @@ void loop_critical_task()
                 {
                     change_state_command = false; // Reset the flag
                 }
-                if (duty_cycle != duty_cycle_ramp[3])
+                if (duty_cycle_counter < 12)
                 {
-                    duty_cycle = duty_cycle_ramp[duty_cycle_counter];
+                    duty_cycle = duty_cycle_ramp_up[duty_cycle_counter];
                     duty_cycle_counter++;
                 }
                 shield.power.setDutyCycle(LEG1,duty_cycle);
@@ -1014,6 +1017,7 @@ void loop_critical_task()
                     pwm_enable = true;
                     shield.power.start(LEG1);
                 }
+                
             }
             else if (module_comand == 2)
             {
@@ -1026,6 +1030,7 @@ void loop_critical_task()
                     shield.power.stop(ALL);
                 }
                 pwm_enable = false;
+                
             }
             else
             {
@@ -1033,7 +1038,12 @@ void loop_critical_task()
                 {
                     change_state_command = false; // Reset the flag
                 }
-                shield.power.setDutyCycle(LEG1,0.0);
+                if (duty_cycle_counter < 12)
+                {
+                    duty_cycle = duty_cycle_ramp_down[duty_cycle_counter];
+                    duty_cycle_counter++;
+                }
+                shield.power.setDutyCycle(LEG1,duty_cycle);
                 if (!pwm_enable)
                 {
                     pwm_enable = true;
