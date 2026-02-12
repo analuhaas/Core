@@ -568,10 +568,10 @@ static float32_t i_lowfilter_value;
 
 /* Oscillations treatment */
 static float32_t duty_cycle = 1.0; // Duty cycle to be used during connected states
-// static float32_t duty_cycle_ramp_up[4] = {0.25,0.5,0.75,0.95}; // Duty cycle ramp in 4 levels to reduce oscillations
-// static float32_t duty_cycle_ramp_down[4] = {0.75,0.5,0.25,0.0}; // Duty cycle ramp in 4 levels to reduce oscillations
-static float32_t duty_cycle_ramp_up[12] = {0.25,0.25,0.25,0.5,0.5,0.5,0.75,0.75,0.75,0.95,0.95,0.95}; // Duty cycle ramp in 4 levels to reduce oscillations
-static float32_t duty_cycle_ramp_down[12] = {0.75,0.75,0.75,0.5,0.5,0.5,0.25,0.25,0.25,0.0,0.0,0.0}; // Duty cycle ramp in 4 levels to reduce oscillations
+static float32_t duty_cycle_ramp_up[4] = {0.25,0.5,0.75,0.95}; // Duty cycle ramp in 4 levels to reduce oscillations
+static float32_t duty_cycle_ramp_down[4] = {0.75,0.5,0.25,0.0}; // Duty cycle ramp in 4 levels to reduce oscillations
+// static float32_t duty_cycle_ramp_up[12] = {0.25,0.25,0.25,0.5,0.5,0.5,0.75,0.75,0.75,0.95,0.95,0.95}; // Duty cycle ramp in 4 levels to reduce oscillations
+// static float32_t duty_cycle_ramp_down[12] = {0.75,0.75,0.75,0.5,0.5,0.5,0.25,0.25,0.25,0.0,0.0,0.0}; // Duty cycle ramp in 4 levels to reduce oscillations
 uint32_t duty_cycle_counter = 0;
 
 /* --------------SETUP FUNCTIONS------------------------------- */
@@ -1006,7 +1006,7 @@ void loop_critical_task()
                 {
                     change_state_command = false; // Reset the flag
                 }
-                if (duty_cycle_counter < 12)
+                if (duty_cycle_counter < 4)
                 {
                     duty_cycle = duty_cycle_ramp_up[duty_cycle_counter];
                     duty_cycle_counter++;
@@ -1038,7 +1038,7 @@ void loop_critical_task()
                 {
                     change_state_command = false; // Reset the flag
                 }
-                if (duty_cycle_counter < 12)
+                if (duty_cycle_counter < 4)
                 {
                     duty_cycle = duty_cycle_ramp_down[duty_cycle_counter];
                     duty_cycle_counter++;
