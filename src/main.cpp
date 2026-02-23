@@ -39,6 +39,7 @@
 #include "TaskAPI.h"
 
 /*--------------OWNTECH Libraries----------------------------- */
+#include "trigo.h"
 #include "pid.h"
 #include "arm_math_types.h"
 #include <ScopeMimicry.h>
@@ -59,7 +60,6 @@ void loop_critical_task();
 
 /* [us] period of the control task */
 static uint32_t control_task_period = 100; // 100 µs
-static const float32_t Ts = control_task_period * 1e-6F;
 /* [bool] state of the PWM (ctrl task) */
 static bool pwm_enable = false;
 
@@ -67,27 +67,18 @@ uint8_t received_serial_char;
 
 /* Measure variables */
 
-static float32_t V1_low_value = 0;
+static float32_t V1_low_value;
 static float32_t V2_low_value;
 static float32_t I1_low_value;
 static float32_t I2_low_value;
 static float32_t I_high;
 static float32_t V_high;
 
+
 /* Temporary storage fore measured value (ctrl task) */
 static float meas_data;
 
 float32_t duty_cycle = 0.3;
-
-/* PID coefficients for a 8.6ms step response*/
-static float32_t kp = 0.000215;
-static float32_t Ti = 7.5175e-5;
-static float32_t Td = 0.0;
-static float32_t N = 0.0;
-static float32_t upper_bound = 1.0F;
-static float32_t lower_bound = 0.0F;
-static PidParams pid_params(Ts, kp, Ti, Td, N, lower_bound, upper_bound);
-static Pid pid;
 
 /* Scope variables */
 
@@ -108,8 +99,21 @@ static uint32_t critical_task_timer = 0;
 static const float32_t decalage_source = 0;
 static bool Vsource_turnoff_indicator = false;
 static bool Vsource_ON_once_indicator = false;
+static uint8_t seq_ON_OFF[2] = {0, 1}; // Connection sequence for HF
+static uint8_t ONOFF_index;
+static float counter_ONOFF;
+static float32_t f_sw_HF = 1000; // in Hz
+static float32_t HF_period = 1/f_sw_HF;
 static float32_t udc = 20.0; // VDC value on the module test
 
+/* NLM */
+static float32_t m = 1;
+static float32_t a = 1;
+static float32_t angle;
+static const float f0 = 250.F;
+static const float w0 = 2 * PI * f0;
+static float32_t Ts = control_task_period * 1e-6F;
+static float32_t modulation_signal_upper;
 /*--------------------------------------------------------------- */
 
 /* LIST OF POSSIBLE MODES FOR THE OWNTECH CONVERTER */
@@ -162,12 +166,13 @@ void dump_scope_datas(ScopeMimicry &scope)  {
 void setup_routine()
 {
     /* Buck voltage mode */
+    //shield.power.initBuck(LEG1);
     shield.power.initBuck(LEG1);
     shield.power.initBoost(LEG2);
 
     shield.sensors.enableDefaultTwistSensors();
 
-    shield.power.connectCapacitor(LEG1);
+    shield.power.disconnectCapacitor(LEG1);
     shield.power.disconnectCapacitor(LEG2);
 
     /* Enable switch control with max and min duty cycle*/
@@ -175,17 +180,14 @@ void setup_routine()
     shield.power.setDutyCycleMin(ALL,0.0);
 
     /* Configure scope channels, what measurelents do you want to acquire? */
-    scope.connectChannel(I1_low_value, "I_SM");
-    scope.connectChannel(V1_low_value, "V_SM");
+    scope.connectChannel(I1_low_value, "I1low");
+    scope.connectChannel(V1_low_value, "V1low");
     scope.connectChannel(g_float, "mode");
-    scope.connectChannel(seq_timer, "time"); // to verify if there is nothing
+    scope.connectChannel(seq_timer, "time"); 
     scope.connectChannel(V_high, "V_high"); // to verify capacitor voltage
     scope.set_trigger(&a_trigger);
     scope.set_delay(0.0F);
     scope.start();
-    //Vc_BTS indicates the bootstrap capacitor charge level, we have to measure it externally
-
-    pid.init(pid_params);
 
     /* Then declare tasks */
     uint32_t app_task_number = task.createBackground(loop_application_task);
@@ -276,7 +278,7 @@ void loop_application_task()
         printk("%.3f:", (double)scope_timer);
         printk("%i:", mode);
         printk("\n");
-    task.suspendBackgroundMs(1000);
+    task.suspendBackgroundMs(10000);
 }
 
 /**
@@ -288,7 +290,6 @@ void loop_application_task()
  */
 void loop_critical_task()
 {
-    
     meas_data = shield.sensors.getLatestValue(I1_LOW);
     if (meas_data != NO_VALUE) I1_low_value = meas_data;
     
@@ -306,13 +307,6 @@ void loop_critical_task()
 
     meas_data = shield.sensors.getLatestValue(V_HIGH);
     if (meas_data != NO_VALUE) V_high = meas_data;
-    /*
-    //For testing logic
-    if(critical_task_timer == 100000)
-        {
-            V1_low_value=20;
-        }
-    */
 
     if (mode == IDLEMODE)
     {
@@ -322,7 +316,7 @@ void loop_critical_task()
         }
         pwm_enable = false;
 
-        if (V1_low_value<2) // If VDC is OFF, sequence can be restarted without uploading again
+        if (V1_low_value<2) // If VDC is ON, starts sequence with small delay
         {
             Vsource_ON_once_indicator = false;
         }
@@ -333,40 +327,31 @@ void loop_critical_task()
             trigger = true;
             Vsource_ON_once_indicator = true;
             seq_timer = 0;
+            counter_ONOFF = 0;
         }
     }
 
     else if (mode == FIRSTSEQUENCEMODE)
     {
         
-        if(seq_timer >= 0 && seq_timer < 0.1) // BLOCK
+        if(seq_timer >= 0 && seq_timer < 0.35) // BLOCK
         {
             g=2;
-            
         }
-        if(seq_timer >= 0.1 && seq_timer < 0.2) // ON
+        if(seq_timer >= 0.35 && seq_timer < 0.38) // ON/OFF
         {
-            g=1;
+            g = seq_ON_OFF[ONOFF_index];
         }
-        if(seq_timer >= 0.2) // OFF
+        if(seq_timer >= decalage_source + 0.38) // BLOCK
         {
-            g=0;
+            g=2;
+            counter_ONOFF = 0;
             if (V1_low_value < udc/2) // If VDC is TURNED OFF, pass to second part of the sequence
             {
                 mode = SECONDSEQUENCEMODE;
                 seq_timer = 0.45;
             }
         }
-
-        g_float = (float)g;
-        
-        /* Scope data acquisition */
-        if (scope_timer == scope_period)
-        {
-            scope.acquire();
-            scope_timer = 0;
-        }
-        scope_timer++;
         
         if(g == 0) // SM is off
         {
@@ -393,38 +378,54 @@ void loop_critical_task()
                 shield.power.stop(ALL);
             }
             pwm_enable = false;
-        }            
+        }           
         
+        //Pulse generator at HF frequency
+        if (counter_ONOFF <= HF_period/2 - Ts)
+        {
+            ONOFF_index = 0;
+        }
+        if (counter_ONOFF > HF_period/2 - Ts)
+        {
+            ONOFF_index = 1;
+        }
+        if (counter_ONOFF >= HF_period)
+        {
+            counter_ONOFF = 0;
+        }
+        counter_ONOFF += Ts;
+        
+        /* Scope data acquisition */
+        g_float = (float)g;
+        if (scope_timer == scope_period)
+        {
+            scope.acquire();
+            scope_timer = 0;
+        }
+        scope_timer++;
         seq_timer += Ts;
     }
     else if (mode == SECONDSEQUENCEMODE)
     {
-
-        if(seq_timer >= 0.2 && seq_timer < 0.7) // OFF
+        
+        if(seq_timer >= 0.38) // BLOCK
         {
-            g=0;
+            g=2;
+            counter_ONOFF = 0;
+            
         }
-        if(seq_timer >= 0.7 && seq_timer < 0.8) // BLOCK
+        if(seq_timer >= 0.8 && seq_timer < 0.83) // ON/OFF
+        {
+            g = seq_ON_OFF[ONOFF_index];
+        }
+        if(seq_timer >= 0.83 && seq_timer < 1) // BLOCK
         {
             g=2;
         }
-        if(seq_timer >= 0.8 && seq_timer < 1) // ON
-        {
-            g=1;
-        }
-        if(seq_timer >= 1) // IDLE
+        if(seq_timer >= 1)
         {
             mode = IDLEMODE;
         }
-        g_float = (float)g;
-        
-        /* Scope data acquisition */
-        if (scope_timer == scope_period)
-        {
-            scope.acquire();
-            scope_timer = 0;
-        }
-        scope_timer++;
         
         if(g == 0) // SM is off
         {
@@ -451,10 +452,34 @@ void loop_critical_task()
                 shield.power.stop(ALL);
             }
             pwm_enable = false;
-        }            
+        }           
         
+        //Pulse generator at HF frequency
+        if (counter_ONOFF <= HF_period/2 - Ts)
+        {
+            ONOFF_index = 0;
+        }
+        if (counter_ONOFF > HF_period/2 - Ts)
+        {
+            ONOFF_index = 1;
+        }
+        if (counter_ONOFF >= HF_period)
+        {
+            counter_ONOFF = 0;
+        }
+        counter_ONOFF += Ts;
+        
+        /* Scope data acquisition */
+        g_float = (float)g;
+        if (scope_timer == scope_period)
+        {
+            scope.acquire();
+            scope_timer = 0;
+        }
+        scope_timer++;
         seq_timer += Ts;
     }
+
     critical_task_timer++;
 
 }
