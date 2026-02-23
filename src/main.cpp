@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-present LAAS-CNRS
+ * Copyright (c) 2025-present LAAS-CNRS
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as published by
@@ -18,12 +18,16 @@
  */
 
 /**
- * @brief  This example demonstrates how to deploy a Buck converter with
- *         voltage mode control on the Twist power shield.
+ * @brief  This example deploys the open-loop control of a MMC arm integrating a Capacitor Voltage Balancing algorithm. 
+ *         This research was funded in whole by the French National Research Agency (ANR) under the project CARROTS "ANR-24-CE05-0920-01".
  *
- * @author Clément Foucher <clement.foucher@laas.fr>
- * @author Luiz Villa <luiz.villa@laas.fr>
  * @author Ayoub Farah Hassan <ayoub.farah-hassan@laas.fr>
+ * @author Ana Luiza Haas Bezerra <ana-luiza.haas-bezerra@centralesupelec.fr>
+ * @author Zaid Jabbar <zaid.jabbar@grenoble-inp.fr>
+ * @author Luiz Villa <luiz.villa@laas.fr>
+ * @author Jean Alinei <jean.alinei@owntech.org>
+ * @author Noemi Lanciotti <noemi.lanciotti@centralesupelec.fr>
+ * @author Loïc Quéval <loic.queval@centralesupelec.fr>
  */
 
 /*--------------Zephyr---------------------------------------- */
@@ -35,7 +39,6 @@
 #include "TaskAPI.h"
 
 /*--------------OWNTECH Libraries----------------------------- */
-#include "trigo.h"
 #include "pid.h"
 #include "arm_math_types.h"
 #include <ScopeMimicry.h>
@@ -56,6 +59,7 @@ void loop_critical_task();
 
 /* [us] period of the control task */
 static uint32_t control_task_period = 100; // 100 µs
+static const float32_t Ts = control_task_period * 1e-6F;
 /* [bool] state of the PWM (ctrl task) */
 static bool pwm_enable = false;
 
@@ -63,18 +67,27 @@ uint8_t received_serial_char;
 
 /* Measure variables */
 
-static float32_t V1_low_value;
+static float32_t V1_low_value = 0;
 static float32_t V2_low_value;
 static float32_t I1_low_value;
 static float32_t I2_low_value;
 static float32_t I_high;
 static float32_t V_high;
 
-
 /* Temporary storage fore measured value (ctrl task) */
 static float meas_data;
 
 float32_t duty_cycle = 0.3;
+
+/* PID coefficients for a 8.6ms step response*/
+static float32_t kp = 0.000215;
+static float32_t Ti = 7.5175e-5;
+static float32_t Td = 0.0;
+static float32_t N = 0.0;
+static float32_t upper_bound = 1.0F;
+static float32_t lower_bound = 0.0F;
+static PidParams pid_params(Ts, kp, Ti, Td, N, lower_bound, upper_bound);
+static Pid pid;
 
 /* Scope variables */
 
@@ -86,7 +99,7 @@ static bool trigger = false;
 static uint32_t scope_timer = 0;
 static uint32_t scope_period = 10; // scope acquire data every t = scope_period (10) * critical_task_period (100 µs) = 1 ms;
 
-/* SM switching variables */
+/* SM test variables */
 
 static uint8_t g = 2;
 static float32_t g_float;
@@ -95,29 +108,16 @@ static uint32_t critical_task_timer = 0;
 static const float32_t decalage_source = 0;
 static bool Vsource_turnoff_indicator = false;
 static bool Vsource_ON_once_indicator = false;
-static uint8_t seq_ON_OFF[2] = {0, 1}; // Connection sequence for HF
-static uint8_t ONOFF_index;
-static float counter_ONOFF;
-static float32_t f_sw_HF = 250; // in Hz
-static float32_t HF_period = 1/f_sw_HF;
-//static float32_t HF_period = 0.0003;
+static float32_t udc = 20.0; // VDC value on the module test
 
-/* NLM */
-static float32_t m = 1;
-static float32_t a = 1;
-static float32_t angle;
-static const float f0 = 250.F;
-static const float w0 = 2 * PI * f0;
-static float32_t Ts = control_task_period * 1e-6F;
-static float32_t modulation_signal_upper;
 /*--------------------------------------------------------------- */
 
 /* LIST OF POSSIBLE MODES FOR THE OWNTECH CONVERTER */
 enum serial_interface_menu_mode
 {
     IDLEMODE = 0,
-    DECHARGEMODE = 1,
-    SEQUENCEMODE = 2,
+    FIRSTSEQUENCEMODE = 1,
+    SECONDSEQUENCEMODE = 2,
 };
 
 uint8_t mode = IDLEMODE;
@@ -162,13 +162,12 @@ void dump_scope_datas(ScopeMimicry &scope)  {
 void setup_routine()
 {
     /* Buck voltage mode */
-    //shield.power.initBuck(LEG1);
     shield.power.initBuck(LEG1);
     shield.power.initBoost(LEG2);
 
     shield.sensors.enableDefaultTwistSensors();
-    //shield.power.disconnectCapacitor(ALL);
-    shield.power.disconnectCapacitor(LEG1);
+
+    shield.power.connectCapacitor(LEG1);
     shield.power.disconnectCapacitor(LEG2);
 
     /* Enable switch control with max and min duty cycle*/
@@ -176,14 +175,17 @@ void setup_routine()
     shield.power.setDutyCycleMin(ALL,0.0);
 
     /* Configure scope channels, what measurelents do you want to acquire? */
-    scope.connectChannel(I1_low_value, "I1low");
-    scope.connectChannel(V1_low_value, "V1low");
+    scope.connectChannel(I1_low_value, "I_SM");
+    scope.connectChannel(V1_low_value, "V_SM");
     scope.connectChannel(g_float, "mode");
-    scope.connectChannel(seq_timer, "time"); 
+    scope.connectChannel(seq_timer, "time"); // to verify if there is nothing
     scope.connectChannel(V_high, "V_high"); // to verify capacitor voltage
     scope.set_trigger(&a_trigger);
     scope.set_delay(0.0F);
     scope.start();
+    //Vc_BTS indicates the bootstrap capacitor charge level, we have to measure it externally
+
+    pid.init(pid_params);
 
     /* Then declare tasks */
     uint32_t app_task_number = task.createBackground(loop_application_task);
@@ -221,13 +223,15 @@ void loop_communication_task()
         printk("idle mode\n");
         mode = IDLEMODE;
         break;
-    case 'd':
-        printk("power mode\n");
-        mode = DECHARGEMODE;
+    case 'f':
+        printk("first sequence part\n");
+        mode = FIRSTSEQUENCEMODE;
+        trigger = true;
+        seq_timer = 0;
         break;
     case 's':
-        mode = SEQUENCEMODE;
-        trigger = true;
+        printk("second sequence part\n");
+        mode = SECONDSEQUENCEMODE;
         seq_timer = 0;
         break;
     case 'r':
@@ -253,13 +257,13 @@ void loop_application_task()
         }
         is_downloading = false;
     }
-    else if (mode == DECHARGEMODE)
+    else if (mode == SECONDSEQUENCEMODE)
     {
-        //spin.led.turnOn();
+        spin.led.turnOn();
     }
-    else if (mode == SEQUENCEMODE)
+    else if (mode == FIRSTSEQUENCEMODE)
     {
-        //spin.led.toggle();
+        spin.led.toggle();
     }
 
 
@@ -272,7 +276,7 @@ void loop_application_task()
         printk("%.3f:", (double)scope_timer);
         printk("%i:", mode);
         printk("\n");
-    task.suspendBackgroundMs(10000);
+    task.suspendBackgroundMs(1000);
 }
 
 /**
@@ -284,6 +288,7 @@ void loop_application_task()
  */
 void loop_critical_task()
 {
+    
     meas_data = shield.sensors.getLatestValue(I1_LOW);
     if (meas_data != NO_VALUE) I1_low_value = meas_data;
     
@@ -301,8 +306,6 @@ void loop_critical_task()
 
     meas_data = shield.sensors.getLatestValue(V_HIGH);
     if (meas_data != NO_VALUE) V_high = meas_data;
-
-
     /*
     //For testing logic
     if(critical_task_timer == 100000)
@@ -319,66 +322,51 @@ void loop_critical_task()
         }
         pwm_enable = false;
 
-        if (V1_low_value<2) // If VDC is ON, starts sequence with small delay
+        if (V1_low_value<2) // If VDC is OFF, sequence can be restarted without uploading again
         {
             Vsource_ON_once_indicator = false;
         }
 
         if (V1_low_value>=2 && Vsource_ON_once_indicator == false) // If VDC is ON, starts sequence with small delay
         {
-            mode = SEQUENCEMODE;
+            mode = FIRSTSEQUENCEMODE;
             trigger = true;
             Vsource_ON_once_indicator = true;
             seq_timer = 0;
-            counter_ONOFF = 0;
         }
     }
-    else if (mode == DECHARGEMODE)
-    {
-        shield.power.setDutyCycle(LEG1,0.0);
-        if (!pwm_enable)
-        {
-            pwm_enable = true;
-            shield.power.start(LEG1);
-        }
-    }
-    else if (mode == SEQUENCEMODE)
+
+    else if (mode == FIRSTSEQUENCEMODE)
     {
         
-        if(seq_timer >= decalage_source + 0 && seq_timer < decalage_source + 0.35) // BLOCK
+        if(seq_timer >= 0 && seq_timer < 0.1) // BLOCK
         {
             g=2;
-        }
-        if(seq_timer >= decalage_source + 0.35 && seq_timer < decalage_source + 0.38) // ON/OFF
-        {
-            g = seq_ON_OFF[ONOFF_index];
-        }
-        if(seq_timer >= decalage_source + 0.38 && seq_timer < decalage_source + 0.8) // BLOCK
-        {
-            g=2;
-            counter_ONOFF = 0;
-            /*
-            //For testing logic
-            if(seq_timer >= decalage_source + 0.15 && !Vsource_turnoff_indicator)
-            {
-                V1_low_value=0;
-                Vsource_turnoff_indicator = true;
-            }
-            */
             
         }
-        if(seq_timer >= decalage_source + 0.8 && seq_timer < decalage_source + 0.83) // ON/OFF
+        if(seq_timer >= 0.1 && seq_timer < 0.2) // ON
         {
-            g = seq_ON_OFF[ONOFF_index];
+            g=1;
         }
-        if(seq_timer >= decalage_source + 0.83 && seq_timer < decalage_source + 1) // BLOCK
+        if(seq_timer >= 0.2) // OFF
         {
-            g=2;
+            g=0;
+            if (V1_low_value < udc/2) // If VDC is TURNED OFF, pass to second part of the sequence
+            {
+                mode = SECONDSEQUENCEMODE;
+                seq_timer = 0.45;
+            }
         }
-        if(seq_timer >= decalage_source + 1)
+
+        g_float = (float)g;
+        
+        /* Scope data acquisition */
+        if (scope_timer == scope_period)
         {
-            mode = IDLEMODE;
+            scope.acquire();
+            scope_timer = 0;
         }
+        scope_timer++;
         
         if(g == 0) // SM is off
         {
@@ -405,28 +393,68 @@ void loop_critical_task()
                 shield.power.stop(ALL);
             }
             pwm_enable = false;
-        }           
+        }            
         
-        //Pulse generator at HF frequency
-        /* Connection sequence from NLM */
-        angle += w0 * Ts;
-        angle = ot_modulo_2pi(angle);
-        m = 1;
-        modulation_signal_upper = (a + m * ot_sin(angle)) / (2.0);
+        seq_timer += Ts;
+    }
+    else if (mode == SECONDSEQUENCEMODE)
+    {
 
-        ONOFF_index = round(modulation_signal_upper); // recuperate for scope
+        if(seq_timer >= 0.2 && seq_timer < 0.7) // OFF
+        {
+            g=0;
+        }
+        if(seq_timer >= 0.7 && seq_timer < 0.8) // BLOCK
+        {
+            g=2;
+        }
+        if(seq_timer >= 0.8 && seq_timer < 1) // ON
+        {
+            g=1;
+        }
+        if(seq_timer >= 1) // IDLE
+        {
+            mode = IDLEMODE;
+        }
+        g_float = (float)g;
         
         /* Scope data acquisition */
-        g_float = (float)g;
         if (scope_timer == scope_period)
         {
             scope.acquire();
             scope_timer = 0;
         }
         scope_timer++;
+        
+        if(g == 0) // SM is off
+        {
+            shield.power.setDutyCycle(LEG1,0.0);
+            if (!pwm_enable)
+            {
+                pwm_enable = true;
+                shield.power.start(LEG1);
+            }
+        }
+        if(g == 1) // SM is on
+        {
+            shield.power.setDutyCycle(LEG1,1.0);
+            if (!pwm_enable)
+            {
+                pwm_enable = true;
+                shield.power.start(LEG1);
+            }
+        }            
+        if(g == 2) // SM is blocked
+        {
+            if (pwm_enable == true)
+            {
+                shield.power.stop(ALL);
+            }
+            pwm_enable = false;
+        }            
+        
         seq_timer += Ts;
     }
-
     critical_task_timer++;
 
 }
