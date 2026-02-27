@@ -67,9 +67,9 @@
 #define UNDER_VOLTAGE 4
 #define OVER_CURRENT 5
 
-constexpr uint8_t MMC_SM_COUNT = 4;
+constexpr uint8_t MMC_SM_COUNT = 10;
 constexpr uint8_t MMC_SM_FIRST = MMC_SM1;
-constexpr uint8_t MMC_SM_LAST = MMC_SM4;
+constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 
 /* -------------- GENERAL MMC DEFINITIONS -------------------- */
 
@@ -82,11 +82,11 @@ constexpr float32_t overcurrent_tolerance = 8.0F; //[A] Set overcurrent toleranc
 
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
-constexpr uint32_t UID_MMC_LEAD_BOARD = 0x00290039;
-constexpr uint32_t UID_MMC_SM1_BOARD = 0x00290043;
-constexpr uint32_t UID_MMC_SM2_BOARD = 0x002B002D;
-constexpr uint32_t UID_MMC_SM3_BOARD = 0x002A0053;
-constexpr uint32_t UID_MMC_SM4_BOARD = 0x0029004C;
+constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
+constexpr uint32_t UID_MMC_SM1_BOARD = 0x0031001B;
+constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004B;
+constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
+constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
 constexpr uint32_t UID_MMC_SM5_BOARD = 0x00330054;
 constexpr uint32_t UID_MMC_SM6_BOARD = 0x11119999;
 constexpr uint32_t UID_MMC_SM7_BOARD = 0x1111AAA0;
@@ -455,7 +455,12 @@ static inline bool mmc_is_upper_arm_module(uint8_t id)
     {
         return true;
     }
-    return (id >= MMC_SM_FIRST) && (id <= MMC_SM_LAST);
+    if (id < MMC_SM_FIRST || id > MMC_SM_LAST)
+    {
+        return false;
+    }
+    uint8_t offset = static_cast<uint8_t>(id - MMC_SM_FIRST);
+    return offset < (MMC_SM_COUNT / 2);
 }
 
 static MMC_frame_t dataTX_mmc;
@@ -517,14 +522,14 @@ static float meas_data;
 /* Scope variables */
 static bool enable_acq; // Sets trigger moment if true
 static const uint16_t NB_DATAS = 1028; // Number of data acquired
-static ScopeMimicry scope(NB_DATAS, 12); // Scope configuration for lead + 4 followers
+static ScopeMimicry scope(NB_DATAS, 14); // Scope configuration with 5 channels
 static bool is_downloading; // Records data if true
 static uint32_t scope_timer = 0;
 static uint32_t scope_period = 1; // scope acquire data every t = scope_period * critical_task_period (100 µs) s;
 
 /* CVB variables */
 
-static uint8_t index_list[total_number_of_modules_arm] = {0,1,2,3}; // Upper arm modules indexes to be sorted with the capacitor voltage vector
+static uint8_t index_list[10] = {0,1,2,3,4,5,6,7,8,9}; // Upper arm modules indexes to be sorted with the capacitor voltage vector
 static float32_t number_of_connected_submodules_upper_arm;
 static float32_t number_of_connected_submodules_lower_arm;
 static float32_t number_of_connected_submodules_upper_arm_past = 0.0F;
@@ -542,6 +547,7 @@ static float32_t g_u_1;
 static float32_t g_u_2;
 static float32_t g_u_3;
 static float32_t g_u_4;
+static float32_t g_u_5;
 static float32_t g_l_1;
 static float32_t g_l_2;
 static float32_t g_l_3;
@@ -573,6 +579,7 @@ static constexpr uint32_t duty_cycle_ramp_step_ticks =
 uint32_t duty_cycle_counter = 0;
 uint32_t duty_cycle_step_counter = 0;
 
+/* Ramping functions */
 static inline void duty_cycle_ramp_reset()
 {
     duty_cycle_counter = 0U;
@@ -605,6 +612,7 @@ static inline void duty_cycle_ramp_apply(bool module_inserted)
 
     shield.power.setDutyCycle(LEG1, duty_cycle);
 }
+
 
 /* --------------SETUP FUNCTIONS------------------------------- */
 
@@ -712,7 +720,6 @@ void reception_function(void)
             else
             {
                 mode = IDLEMODE;
-                Led_turnOFF_LL();
             }
         }
 
@@ -765,7 +772,6 @@ void setup_routine()
 
     const uint32_t board_uid = read_board_uid();
     printk("Board UID: 0x%08" PRIX32 "\n", board_uid);
-    printk("Detected module ID: %u\n", module_ID);
     master = (module_ID == MMC_LEAD);
 
     config_led_LL(); // Configure the LED pin in Low Level
@@ -811,10 +817,12 @@ void setup_routine()
         scope.connectChannel(g_u_2, "g_u_2");
         scope.connectChannel(g_u_3, "g_u_3");
         scope.connectChannel(g_u_4, "g_u_4");
+        scope.connectChannel(g_u_5, "g_u_5");
         scope.connectChannel(MMC_capacitor_voltage[0], "v_c_1");
         scope.connectChannel(MMC_capacitor_voltage[1], "v_c_2");
         scope.connectChannel(MMC_capacitor_voltage[2], "v_c_3");
         scope.connectChannel(MMC_capacitor_voltage[3], "v_c_4");
+        scope.connectChannel(MMC_capacitor_voltage[4], "v_c_5");
         scope.connectChannel(MMC_arm_current[0], "i_u");
         scope.connectChannel(i_lowfilter_value, "i_u_filtered");
         scope.set_trigger(&a_trigger);
@@ -977,7 +985,7 @@ void loop_critical_task()
             number_of_connected_submodules_upper_arm = round(total_number_of_modules_arm*modulation_signal_upper); // recuperate for scope
             number_of_connected_submodules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower); // recuperate for scope
 
-            i_upper_arm = MMC_arm_current[0] + 1.4f;
+            i_upper_arm = MMC_arm_current[0];
             i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
             i_upper_arm = i_lowfilter_value;
             /* Gate assignment with CVB */
@@ -1011,6 +1019,7 @@ void loop_critical_task()
             g_u_2 = (float)g_u[1];  // recuperate for scope acquisition
             g_u_3 = (float)g_u[2];  // recuperate for scope acquisition
             g_u_4 = (float)g_u[3];  // recuperate for scope acquisition
+            g_u_5 = (float)g_u[4];  // recuperate for scope acquisition
 
             /* Scope data acquisition */
             if (scope_timer == scope_period)
@@ -1023,8 +1032,6 @@ void loop_critical_task()
         }
         else
         {
-            Led_turnON_LL();
-            
             /* Verifies if command to be ON or OFF changed */
             if (module_comand != module_command_past)
             {
@@ -1072,9 +1079,6 @@ void loop_critical_task()
             shield.power.stop(ALL);
         }
         pwm_enable = false;
-        duty_cycle_ramp_reset();
-        duty_cycle = 0.0F;
-        module_command_past = 0xFFU;
     }
     counter_timer++;
 }
