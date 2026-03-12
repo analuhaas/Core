@@ -1029,7 +1029,7 @@ void loop_critical_task()
                 
                 delta_N = number_of_connected_submodules_upper_arm - number_of_connected_submodules_upper_arm_past;
                 gate_change = 0;
-                
+
                 memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, total_number_of_modules_arm * sizeof(float32_t));
 
                 sorting_upper_arm(); // Executes the CVB algorithm, chosing which modules to connect
@@ -1102,6 +1102,11 @@ void loop_critical_task()
         /* Made to send IDLE flag only once */
         if (!send_idle && module_ID == MMC_LEAD)
         {
+            g_u[0] = 0;
+            g_u[1] = 0;
+            g_u[2] = 0;
+            g_u[3] = 0;
+            g_u[4] = 0;
             dataTX_mmc.sm_insertion.raw = 0U;
             dataTX_mmc.status.raw = 0U;
             mmc_frame_set_status_code(dataTX_mmc, IDLE);
