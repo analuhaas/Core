@@ -1,4 +1,6 @@
-# MMC arm - with CVB
+# MMC arm - with CVB using overvoltage and overcurrent protection
+
+Important remark: this code will be modified by adding a median filter to the voltage and current measurements used for protection criteria to avoid cutting converter operation only for measurement misreading or spikes.
 
 ## Objectives and context
 
@@ -27,6 +29,30 @@ The CVB algorithm consists of choosing which modules to connect in order to have
 It then generates the command to connect or disconnect the modules by setting the gate command signals ($g_{\left(u,l\right),p}^{M1}$, $g_{\left(u,l\right),p}^{M2}$,..., $g_{\left(u,l\right),p}^{MN}$, to 1 (module connected) or 0 (module disconnected). The complete schematic of the open-loop control implemented:
 
 <img width="677" height="296" alt="image" src="https://github.com/user-attachments/assets/12229f3c-7100-4309-bea4-1ddf11bbbbc0" />
+
+The difference between this example and the arm CVB example is that overvoltage and overcurrent protections are implemented. The protections avoid material damage by setting a limit for capacitor voltage and current using the variables:
+
+```
+constexpr float32_t overvoltage_tolerance = 80.0F; //[V] Set overvoltage tolerance (default max TWIST voltage)
+constexpr float32_t overcurrent_tolerance = 8.0F; //[A] Set overcurrent tolerance (default max TWIST current)
+```
+
+If the module reaches any of these limits, it sends an error message to the LEAD to stop arm operatio, putting all modules to blocked state (equivalent to IDLE). This is done on the lines of code on the communication reception_fucntion():
+```
+/* Verifies overvoltage protection criteria */
+if(Cap_voltage > overvoltage_tolerance)
+{
+    mmc_frame_set_status_code(dataTX_mmc, OVER_VOLTAGE);
+}
+/* Verifies overcurrent protection criteria */
+else if(Arm_current > overcurrent_tolerance)
+{
+    mmc_frame_set_status_code(dataTX_mmc, OVER_CURRENT);
+}
+else{
+    mmc_frame_set_status_code(dataTX_mmc, POWER);
+}
+```
 
 ## Required Hardware list
 
@@ -172,6 +198,18 @@ c.	Configure it to trigger when the stack voltage rises up to 2 V.
 22. TURN OFF all 6V External Auxiliary DC Power Supplies.
 
 ## Expected results
+
+If you perform the stack test using 1 module only and surpass the voltage limit, you should have a result like this:
+
+<img width="1472" height="673" alt="image" src="https://github.com/user-attachments/assets/16012de6-b28f-4337-95ce-30718bc936c0" />
+
+If you perform the stack test using 1 module only and surpass the current limit, you should have a result like this:
+
+<img width="1472" height="673" alt="image" src="https://github.com/user-attachments/assets/58b87250-8fd2-4f9c-8305-b327e7846531" />
+
+We can see that in both situations the module is set to blocked state.
+
+The results for arm test should be the same for the CVB code if the voltage and current limits are respected.
 
 If you perform the stack test with CVB using circuit#1 at 50 Hz, you should expect an experimental result like this:
 
