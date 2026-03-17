@@ -88,14 +88,13 @@ constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
 constexpr uint32_t UID_MMC_SM1_BOARD = 0x0031001B;
 constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004C;
 constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
-// constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
 constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004B;
 constexpr uint32_t UID_MMC_SM5_BOARD = 0x00330054;
-constexpr uint32_t UID_MMC_SM6_BOARD = 0x11119999;
-constexpr uint32_t UID_MMC_SM7_BOARD = 0x1111AAA0;
-constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111BBB1;
-constexpr uint32_t UID_MMC_SM9_BOARD = 0x1111CCC2;
-constexpr uint32_t UID_MMC_SM10_BOARD = 0x1111CCC3;
+constexpr uint32_t UID_MMC_SM6_BOARD =  0x002B002D;
+constexpr uint32_t UID_MMC_SM7_BOARD =  0x00290043;
+constexpr uint32_t UID_MMC_SM8_BOARD =  0x00290049;
+constexpr uint32_t UID_MMC_SM9_BOARD =  0x002A0053;
+constexpr uint32_t UID_MMC_SM10_BOARD = 0x0029004C;
 
 /* --------- BOARD IDENTIFICATION functions ------------------ */
 static uint32_t read_board_uid()
@@ -831,11 +830,23 @@ void setup_routine()
 
         /* Copies from general indexes list the module indexes that compose upper and lower arms, respectively */
         memcpy(modules_indexes_upper_arm, index_list, total_number_of_modules_arm * sizeof(uint8_t));
-        memcpy(modules_indexes_lower_arm,&index_list[total_number_of_modules_arm], total_number_of_modules_arm * sizeof(uint8_t));
+        memcpy(modules_indexes_lower_arm, index_list, total_number_of_modules_arm * sizeof(uint8_t));
     }
     else{
         /* Defines module as follower for communication synchorinization */
         communication.sync.initSlave();
+
+        /* Calibration of current measurement for responsible modules */
+        if (module_ID == MMC_SM1)
+        {
+            shield.sensors.setConversionParametersLinear(I1_LOW,0.005456858,-12.50303931); //Calibration M1
+        }
+        
+        if (module_ID == MMC_SM8)
+        {
+            shield.sensors.setConversionParametersLinear(I1_LOW, 0.005532921,-12.56924881); //Calibration M8
+        }
+        
     }
 }
 
