@@ -578,6 +578,11 @@ static constexpr uint32_t duty_cycle_ramp_step_ticks =
 uint32_t duty_cycle_counter = 0;
 uint32_t duty_cycle_step_counter = 0;
 
+float32_t Vbus = 48.0F;
+float32_t Vref = Vbus/total_number_of_modules_arm;
+float32_t duty_step = 0.01;
+float32_t duty_max = 0.1;
+
 /* Ramping functions */
 static inline void duty_cycle_ramp_reset() // Resets duty cycle ramp
 {
@@ -821,8 +826,8 @@ void setup_routine()
         scope.connectChannel(MMC_capacitor_voltage[2], "v_c_3");
         scope.connectChannel(MMC_capacitor_voltage[3], "v_c_4");
         scope.connectChannel(MMC_capacitor_voltage[4], "v_c_5");
-        scope.connectChannel(MMC_arm_current[0], "i_u");
-        scope.connectChannel(MMC_arm_current[8], "i_l");
+        scope.connectChannel(i_upper_arm, "i_u");
+        scope.connectChannel(i_lower_arm, "i_l");
         // scope.connectChannel(i_lowfilter_value, "i_u_filtered");
         scope.set_trigger(&a_trigger);
         scope.set_delay(0.0F);
@@ -1091,27 +1096,57 @@ void loop_critical_task()
             number_of_connected_submodules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower);
 
             /* Updating arm current measurements and filtering */
-            i_upper_arm = MMC_arm_current[0]; // We get the current from module 1
-            i_lower_arm = MMC_arm_current[8]; // We get the current from module 8
+            i_upper_arm = MMC_arm_current[0] +0.75; // We get the current from module 1
+            i_lower_arm = MMC_arm_current[7] +0.75; // We get the current from module 8
             // i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
             // i_upper_arm = i_lowfilter_value;
 
             /* Modules choice with Capacitor Voltage Balancing (CVB) sorting */
             // Executed only when N_on changes
-            if (number_of_connected_submodules_upper_arm != number_of_connected_submodules_upper_arm_past){
+            // if (number_of_connected_submodules_upper_arm != number_of_connected_submodules_upper_arm_past){
                 
-                /* Updating capacitor voltages measurements */
-                memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, total_number_of_modules_arm * sizeof(float32_t));
-                memcpy(modules_capacitor_voltages_lower_arm, &MMC_capacitor_voltage[total_number_of_modules_arm], total_number_of_modules_arm * sizeof(float32_t));
+            //     /* Updating capacitor voltages measurements */
+            //     // memcpy(modules_capacitor_voltages_upper_arm, MMC_capacitor_voltage, total_number_of_modules_arm * sizeof(float32_t));
+            //     // memcpy(modules_capacitor_voltages_lower_arm, &MMC_capacitor_voltage[total_number_of_modules_arm], total_number_of_modules_arm * sizeof(float32_t));
 
-                /* Executes the CVB algorithm, chosing which modules to connect */
-                sorting_upper_arm(); 
-                sorting_lower_arm(); 
-                number_of_connected_submodules_upper_arm_past = number_of_connected_submodules_upper_arm;
-                number_of_connected_submodules_lower_arm_past = number_of_connected_submodules_lower_arm;
-            }
+            //     /* Executes the CVB algorithm, chosing which modules to connect */
+            //     // sorting_upper_arm(); 
+            //     // sorting_lower_arm(); 
+            //     number_of_connected_submodules_upper_arm_past = number_of_connected_submodules_upper_arm;
+            //     number_of_connected_submodules_lower_arm_past = number_of_connected_submodules_lower_arm;
+            // }
 
             dataTX_mmc.sm_insertion.raw = 0U;
+
+
+            /* Modules choice with preference order M1 > M2 > M3 > M4 > M5 */
+            for(uint8_t counter = 0; counter < total_number_of_modules_arm; counter++)
+            {
+                if(counter < number_of_connected_submodules_upper_arm)
+                {
+                    uint8_t index_preference_order = modules_indexes_upper_arm[counter];
+                    g_u[index_preference_order] = 1;
+                }
+                else{
+                    uint8_t index_preference_order = modules_indexes_upper_arm[counter];
+                    g_u[index_preference_order] = 0;
+                }
+
+            }
+            /* Modules choice with preference order M1 > M2 > M3 > M4 > M5 */
+            for(uint8_t counter = 0; counter < total_number_of_modules_arm; counter++)
+            {
+                if(counter < number_of_connected_submodules_lower_arm)
+                {
+                    uint8_t index_preference_order = modules_indexes_lower_arm[counter];
+                    g_l[index_preference_order] = 1;
+                }
+                else{
+                    uint8_t index_preference_order = modules_indexes_lower_arm[counter];
+                    g_l[index_preference_order] = 0;
+                }
+
+            }
 
             /* Modules state assignment according to CVB output */
             for (uint8_t counter = 0; counter < total_number_of_modules_arm; counter++) {
@@ -1120,6 +1155,7 @@ void loop_critical_task()
                 mmc_frame_set_sm_inserted(dataTX_mmc, MMC_SM1 + counter, g_u[counter] != 0U);
                 mmc_frame_set_sm_inserted(dataTX_mmc, MMC_SM6 + counter, g_l[counter] != 0U);
             }
+
 
             /* Fills all other communication trame spaces */
             dataTX_mmc.status.raw = 0U; // Reset status code
@@ -1151,6 +1187,7 @@ void loop_critical_task()
         }
         else //CONTROL INSIDE MODULE - own switching only
         {
+            Led_turnON_LL();
             /* Verifies if module received command changed */
             if (module_comand != module_command_past)
             {
@@ -1193,7 +1230,20 @@ void loop_critical_task()
                 {
                     change_state_command = false; // Reset the flag
                 }
-                shield.power.setDutyCycle(LEG1,0.0); // Duty cycle = 0 makes Q1 open and Q2 closed
+                // shield.power.setDutyCycle(LEG1,0.0); // Duty cycle = 0 makes Q1 open and Q2 closed
+
+                if(V_high>Vref)
+                {
+                    duty_cycle = duty_cycle - duty_step;
+                    if(duty_cycle < 0) duty_cycle = 0;
+                }
+                else
+                {
+                    duty_cycle = duty_cycle + duty_step;
+                    if(duty_cycle > duty_max) duty_cycle = duty_max;
+                }
+                shield.power.setDutyCycle(LEG1, duty_cycle);
+
                 if (!pwm_enable)
                 {
                     pwm_enable = true;
@@ -1207,6 +1257,7 @@ void loop_critical_task()
     }
     else if (mode == IDLEMODE)
     {
+        Led_turnOFF_LL();
         /* Made  such that the LEAD send IDLE flag only once to all modules */
         if (!send_idle && module_ID == MMC_LEAD)
         {
