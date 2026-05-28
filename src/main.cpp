@@ -567,6 +567,12 @@ static float32_t modulation_signal_lower; //[pu] Modulation output lower voltage
 // LowPassFirstOrderFilter i_low_filter(Ts, 180e-6F); // Lowpass filter with tau = 180µs -> fc = 880 Hz
 // static float32_t i_lowfilter_value;
 
+/* Communication delay */
+static bool counter_delay_start; // Records when delay should start
+static uint32_t counter_delay = 0;
+static float32_t counter_delay_time = 0.0F; // s
+static float32_t delay = 400 * 1e-6F; // s
+
 /* Oscillations treatment with duty cycle ramping */
 static float32_t duty_cycle = 0.0F; // Applied duty cycle
 static constexpr uint32_t duty_cycle_ramp_size = 4U; // How many intermediate steps
@@ -752,7 +758,7 @@ void reception_function(void)
             }
             memcpy(buffer_tx, &dataTX_mmc, sizeof(dataTX_mmc));
 
-            communication.rs485.startTransmission();
+            counter_delay_start = true;
             
         }
     }
@@ -1161,6 +1167,11 @@ void loop_critical_task()
         }
         else //CONTROL INSIDE MODULE - own switching only
         {
+            /* Verifies if delay should start */
+            if(counter_delay_start == true){
+                counter_delay++;
+            }
+
             /* Verifies if module received command changed */
             if (module_comand != module_command_past)
             {
@@ -1213,6 +1224,14 @@ void loop_critical_task()
             critical_task_timer++;
         } 
         module_command_past = module_comand; // Update the past command
+
+        counter_delay_time = counter_delay * Ts;
+
+        if(counter_delay_time >= delay + Ts){
+            communication.rs485.startTransmission();
+            counter_delay_start = false;
+            counter_delay = 0;
+        }
 
     }
     else if (mode == IDLEMODE)
