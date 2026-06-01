@@ -571,7 +571,7 @@ static float32_t modulation_signal_lower; //[pu] Modulation output lower voltage
 static bool counter_delay_start; // Records when delay should start
 static uint32_t counter_delay = 0;
 static float32_t counter_delay_time = 0.0F; // s
-static float32_t delay = 400 * 1e-6F; // s
+static float32_t delay = Ts * 2; // s
 
 /* Oscillations treatment with duty cycle ramping */
 static float32_t duty_cycle = 0.0F; // Applied duty cycle
@@ -1107,8 +1107,8 @@ void loop_critical_task()
             /* Updating arm current measurements and filtering */
             // i_upper_arm = 1.0F; // We get the current from module 1
             // i_lower_arm = 1.0F; // We get the current from module 6
-            i_upper_arm = MMC_arm_current[0]; // We get the current from module 1
-            i_lower_arm = MMC_arm_current[5]; // We get the current from module 6
+            i_upper_arm = MMC_arm_current[0]+0.45F; // We get the current from module 1
+            i_lower_arm = MMC_arm_current[5]+1.0F; // We get the current from module 6
             // i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
             // i_upper_arm = i_lowfilter_value;
 
@@ -1185,7 +1185,7 @@ void loop_critical_task()
                 {
                     change_state_command = false; // Reset the flag
                 }
-                shield.power.setDutyCycle(LEG1,1.0); // Duty cycle = 1.0 makes Q1 mostly closed and Q2 mostly open
+                shield.power.setDutyCycle(LEG1,0.9); // Duty cycle = 1.0 makes Q1 mostly closed and Q2 mostly open
                 if (!pwm_enable)
                 {
                     pwm_enable = true;
