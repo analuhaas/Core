@@ -74,8 +74,8 @@ constexpr uint8_t MMC_SM_LAST = MMC_SM10;
 /* -------------- GENERAL MMC DEFINITIONS -------------------- */
 /* --------------- To be changed by user --------------------- */
 
-static const float f0 = 50.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
-static const uint8_t total_number_of_modules_arm = 5; //[-] Number of modules per arm
+static const float f0 = 25.F; //[Hz] Output frequency used to generate the sinusoidal reference for open-loop control
+static const uint8_t total_number_of_modules_arm = 1; //[-] Number of modules per arm
 constexpr float32_t Vcap_expected = 80.0F; //[V] Capacitor DC voltage expected during the test (used to set voltage measurement scale for 12 bits)
 constexpr float32_t i_expected = 10.0F; //[A] Expected current amplitude during test (used to set current measurement scale for 12 bits)
 constexpr float32_t overvoltage_tolerance = 80.0F; //[V] Set overvoltage tolerance (default max TWIST voltage)
@@ -1101,7 +1101,7 @@ void loop_critical_task()
             /* Updating arm current measurements and filtering */
             // i_upper_arm = 1.0F; // We get the current from module 1
             // i_lower_arm = 1.0F; // We get the current from module 6
-            i_upper_arm = MMC_arm_current[0]+0.45F; // We get the current from module 1
+            i_upper_arm = MMC_arm_current[0]; // We get the current from module 1
             i_lower_arm = MMC_arm_current[5]+1.0F; // We get the current from module 6
             // i_lowfilter_value = i_low_filter.calculateWithReturn(i_upper_arm); // filtered current value
             // i_upper_arm = i_lowfilter_value;
@@ -1176,7 +1176,7 @@ void loop_critical_task()
                 {
                     change_state_command = false; // Reset the flag
                 }
-                shield.power.setDutyCycle(LEG1,0.9); // Duty cycle = 1.0 makes Q1 mostly closed and Q2 mostly open
+                shield.power.setDutyCycle(LEG1,1.0); // Duty cycle = 1.0 makes Q1 mostly closed and Q2 mostly open
                 if (!pwm_enable)
                 {
                     pwm_enable = true;
