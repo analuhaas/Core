@@ -7,5 +7,6 @@
     ".gitignore": false,
     "docs": false,
     ".github": false
-  }
+  },
+  "cmake.sourceDirectory": "C:/Users/ana/Documents/PhD/Cartes_OnwTech/main/Core/zephyr"
 }

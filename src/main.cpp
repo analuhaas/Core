@@ -31,6 +31,7 @@
 #include "TaskAPI.h"
 #include "ShieldAPI.h"
 #include "SpinAPI.h"
+#include "CommunicationAPI.h"
 
 /* From control library */
 #include "trigo.h"
@@ -41,6 +42,15 @@
 
 #define DUTY_MIN 0.1F
 #define DUTY_MAX 0.9F
+
+#define ROLE_MASTER 0
+#define ROLE_FOLLOWER 1
+
+#define IDLE 0
+#define POWER 1
+
+// Select board role manually: set ROLE_MASTER on one board and ROLE_FOLLOWER on the other.
+uint8_t role_id = ROLE_FOLLOWER;
 
 /*--------------SETUP FUNCTIONS DECLARATION------------------- */
 /* Setups the hardware and software of the system */
@@ -202,9 +212,77 @@ static HarmonicDetector h3Detector;
 static float32_t h3_amplitude;
 /* ScopeMimicry instance for recording control variables and diagnostics */
 static ScopeMimicry scope(SCOPE_BUFFER_SIZE, SCOPE_CHANNEL_COUNT);
+
+/**
+ * @brief Frame exchanged over the RS485 communication bus.
+ *
+ * Structure overview:
+ * - `theta_raw`: 12-bit encoded capacitor voltage.
+ */
+struct RS485_frame
+{
+    float theta;
+    uint8_t sender_id;
+    uint8_t status_code;
+} __packed;
+
+typedef RS485_frame RS485_frame_t;
+
+static RS485_frame_t frame_tx;
+static RS485_frame_t frame_rx;
+
+constexpr size_t RS485_FRAME_SIZE = sizeof(RS485_frame_t);
+
+// RS485 peripheral works with byte arrays; memcpy copies typed frame data into raw bytes.
+uint8_t buffer_tx[RS485_FRAME_SIZE];
+uint8_t buffer_rx[RS485_FRAME_SIZE];
+
+static float RS485_theta = 0.0F;
+
+
 /*--------------------------------------------------------------- */
 
 /**********************  SUPPORT FUNCTIONS  ***************************/
+
+void reception_function(void)
+{
+    // buffer_rx contains raw bytes received from RS485. memcpy rebuilds a typed frame.
+    memcpy(&frame_rx, buffer_rx, sizeof(frame_rx));
+
+    if (role_id == ROLE_FOLLOWER)
+    {
+        // FOLLOWER flow: read master's command/status, then answer immediately with local measurement.
+        if (frame_rx.sender_id == ROLE_MASTER)
+        {
+            if(frame_rx.status_code == POWER)
+            {
+                mode = POWERMODE;
+            }
+            else
+            {
+                mode = IDLEMODE;
+            }
+
+            frame_tx.sender_id = ROLE_FOLLOWER;
+            frame_tx.theta = RS485_theta;
+
+            memcpy(buffer_tx, &frame_tx, sizeof(frame_tx));
+
+            // startTransmission() pushes buffer_tx to the RS485 driver and starts bus transmission.
+            communication.rs485.startTransmission();
+        }
+    }
+    else
+    {
+        // MASTER flow: store follower feedback when its reply is received.
+        if (frame_rx.sender_id == ROLE_FOLLOWER)
+        {
+            RS485_theta = frame_rx.theta;
+            inverter.setTheta(RS485_theta);
+        }
+    }
+}
+
 
 /**
  * @brief Reports whether the scope capture should trigger.
@@ -377,7 +455,7 @@ void setup_scope()
     scope.connectChannel(omega, "omega");
     scope.connectChannel(phase_shift_deg, "phase_shift");
     scope.connectChannel(state_mode_scope, "state");
-    scope.connectChannel(h3_amplitude, "h3_amplitude");
+    scope.connectChannel(inverter_theta, "theta");
     scope.set_delay(0.5F);
     scope.set_trigger(a_trigger);
     scope.start();
@@ -433,6 +511,11 @@ void setup_routine()
     shield.power.setDeadTime(LEG1, 100, 100);
     shield.power.setDeadTime(LEG2, 100, 100);
     shield.sensors.enableDefaultTwistSensors();
+
+    communication.rs485.configure(buffer_tx, buffer_rx, sizeof(buffer_rx),
+                                  reception_function,
+                                  SPEED_20M); // custom configuration for RS485
+
     shield.power.disconnectCapacitor(LEG1);
     shield.power.disconnectCapacitor(LEG2);
     shield.power.initBuck(LEG1);
@@ -442,7 +525,19 @@ void setup_routine()
     Vdq_ref.q = 0.0F;
     h3Detector.init(TS, 3.0F * W0, 1.0F / (PI * F0));
     setup_scope();
-    inverter.init(FORMING, BIPOLAR, DC_BUS_FALLBACK, local_voltage_amplitude, W0, TS);
+
+    if(role_id == ROLE_MASTER){
+        inverter.init(FORMING, BIPOLAR, DC_BUS_FALLBACK, local_voltage_amplitude, W0, TS);
+        communication.sync.initMaster();
+
+
+    }
+    else{
+            inverter.init(FOLLOWING, BIPOLAR, DC_BUS_FALLBACK, local_voltage_amplitude, W0, TS);    
+            communication.sync.initSlave();
+
+
+    }
 
     uint32_t app_task_number = task.createBackground(loop_application_task);
     uint32_t com_task_number = task.createBackground(loop_communication_task);
@@ -593,6 +688,16 @@ void loop_critical_task()
         start_pwm_outputs();
 
     } else if (mode == POWERMODE) {
+        if (role_id == ROLE_MASTER)
+        {
+            frame_tx.sender_id = ROLE_MASTER;
+            frame_tx.status_code = POWER;
+            frame_tx.theta = inverter_theta;
+
+            memcpy(buffer_tx, &frame_tx, sizeof(frame_tx));
+            communication.rs485.startTransmission();
+        }
+
         inverter.setPowerOn(true);
         inverter.setVBus(control_bus_voltage());
         inverter.setVdqRef(Vdq_ref);
