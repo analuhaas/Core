@@ -28,6 +28,8 @@
  */
 
  /*--------------OWNTECH APIs---------------------------------- */
+#include <math.h>
+#include <float.h>
 #include "TaskAPI.h"
 #include "ShieldAPI.h"
 #include "SpinAPI.h"
@@ -78,6 +80,10 @@ void setup_scope();
 void read_measurements();
 /* Checks both measured currents against the protection threshold */
 bool overcurrent_detected();
+/* Accumulates squared currents and refreshes the RMS values once per grid period */
+void update_rms();
+/* Tracks V_high min/max/mean and refreshes the bus voltage ripple once per grid period */
+void update_voltage_ripple();
 
 /*--------------USER VARIABLES DECLARATIONS------------------- */
 
@@ -100,10 +106,12 @@ static constexpr float32_t F0 = 50.0F;
 static constexpr float32_t W0 = 2.0F * PI * F0;
 /* Maximum current for overcurrent protection in amps */
 static constexpr float32_t MAX_CURRENT = 8.0F;
+/* Number of critical task samples in one grid period (TS * RMS_WINDOW_SAMPLES = 1/F0) */
+static constexpr uint32_t RMS_WINDOW_SAMPLES = static_cast<uint32_t>(1.0F / (F0 * TS) + 0.5F);
 /* Size of the scope buffer for data recording */
 static constexpr uint32_t SCOPE_BUFFER_SIZE = 1024;
 /* Number of channels recorded in the scope for diagnostics */
-static constexpr uint8_t SCOPE_CHANNEL_COUNT = 13;
+static constexpr uint8_t SCOPE_CHANNEL_COUNT = 17;
 
 /* State of the PWM outputs */
 static bool pwm_enable = false;
@@ -137,6 +145,32 @@ static float32_t V_high_filt;
 static float32_t Vgrid_meas;
 /* [V] Temporary variable for storing sensor measurements */
 static float32_t meas_data;
+
+/* [A] RMS value of current 1, refreshed once per grid period */
+static float32_t I1_rms;
+/* [A] RMS value of current 2, refreshed once per grid period */
+static float32_t I2_rms;
+/* [A^2] Running sum of squares of I1_low_value over the current grid period */
+static float32_t I1_sum_sq;
+/* [A^2] Running sum of squares of I2_low_value over the current grid period */
+static float32_t I2_sum_sq;
+/* Number of samples accumulated in the current RMS window */
+static uint32_t rms_sample_count;
+
+/* [V] Peak-to-peak ripple of V_high over the last grid period */
+static float32_t Vhigh_ripple_pp;
+/* [%] Peak-to-peak ripple of V_high relative to its mean over the last grid period */
+static float32_t Vhigh_ripple_pct;
+/* [V] Mean of V_high over the current grid period window */
+static float32_t Vhigh_mean;
+/* [V] Running minimum of V_high in the current grid period window */
+static float32_t Vhigh_min_running = FLT_MAX;
+/* [V] Running maximum of V_high in the current grid period window */
+static float32_t Vhigh_max_running = -FLT_MAX;
+/* [V] Running sum of V_high in the current grid period window */
+static float32_t Vhigh_sum;
+/* Number of samples accumulated in the current voltage ripple window */
+static uint32_t vripple_sample_count;
 
 /* [V] Amplitude of the local teaching sine wave */
 static float32_t Mp_init = 0.8F;
@@ -293,6 +327,10 @@ void setup_scope()
 {
     scope.connectChannel(I1_low_value, "I1_low_value");
     scope.connectChannel(I2_low_value, "I2_low_value");
+    scope.connectChannel(I1_rms, "I1_rms");
+    scope.connectChannel(I2_rms, "I2_rms");
+    scope.connectChannel(Vhigh_ripple_pp, "Vhigh_ripple_pp");
+    scope.connectChannel(Vhigh_ripple_pct, "Vhigh_ripple_pct");
     scope.connectChannel(Vgrid_meas, "Vgrid");
     scope.connectChannel(V_high_filt, "Vdc");
     scope.connectChannel(local_vgrid, "local_vgrid");
@@ -345,6 +383,46 @@ bool overcurrent_detected()
            I1_low_value < -MAX_CURRENT ||
            I2_low_value > MAX_CURRENT ||
            I2_low_value < -MAX_CURRENT;
+}
+
+/**
+ * @brief Accumulates squared currents and refreshes the RMS values once per grid period.
+ */
+void update_rms()
+{
+    I1_sum_sq += I1_low_value * I1_low_value;
+    I2_sum_sq += I2_low_value * I2_low_value;
+    rms_sample_count++;
+
+    if (rms_sample_count >= RMS_WINDOW_SAMPLES) {
+        I1_rms = sqrtf(I1_sum_sq / static_cast<float32_t>(RMS_WINDOW_SAMPLES));
+        I2_rms = sqrtf(I2_sum_sq / static_cast<float32_t>(RMS_WINDOW_SAMPLES));
+        I1_sum_sq = 0.0F;
+        I2_sum_sq = 0.0F;
+        rms_sample_count = 0;
+    }
+}
+
+/**
+ * @brief Tracks V_high min/max/mean and refreshes the bus voltage ripple once per grid period.
+ */
+void update_voltage_ripple()
+{
+    if (V_high < Vhigh_min_running) Vhigh_min_running = V_high;
+    if (V_high > Vhigh_max_running) Vhigh_max_running = V_high;
+    Vhigh_sum += V_high;
+    vripple_sample_count++;
+
+    if (vripple_sample_count >= RMS_WINDOW_SAMPLES) {
+        Vhigh_mean = Vhigh_sum / static_cast<float32_t>(RMS_WINDOW_SAMPLES);
+        Vhigh_ripple_pp = Vhigh_max_running - Vhigh_min_running;
+        Vhigh_ripple_pct = (Vhigh_mean != 0.0F) ? (Vhigh_ripple_pp / Vhigh_mean) * 100.0F : 0.0F;
+
+        Vhigh_sum = 0.0F;
+        Vhigh_min_running = FLT_MAX;
+        Vhigh_max_running = -FLT_MAX;
+        vripple_sample_count = 0;
+    }
 }
 
 /*----------------------- END OF SUPPORT FUNCTIONS ------------------------- */
@@ -461,14 +539,18 @@ void loop_application_task()
         dump_scope_datas(scope);
         is_downloading = false;
     } else {
-        printk("state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f\n",
+        printk("state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f:I1rms %.3f:I2rms %.3f:Vpp %.3f:Vpp%% %.2f\n",
                mode,
                static_cast<double>(V_high_filt),
                static_cast<double>(Vgrid_meas),
                static_cast<double>(local_vgrid),
                static_cast<double>(Mp),
                static_cast<double>(duty_cycle_1),
-               static_cast<double>(duty_cycle_2));
+               static_cast<double>(duty_cycle_2),
+               static_cast<double>(I1_rms),
+               static_cast<double>(I2_rms),
+               static_cast<double>(Vhigh_ripple_pp),
+               static_cast<double>(Vhigh_ripple_pct));
     }
 
     task.suspendBackgroundMs(100);
@@ -481,6 +563,8 @@ void loop_critical_task()
 {
     critical_task_counter++;
     read_measurements();
+    update_rms();
+    update_voltage_ripple();
     update_teaching_sine();
 
     if (overcurrent_detected()) {
