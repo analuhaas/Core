@@ -114,7 +114,7 @@ static constexpr float32_t F0 = 50.0F;
 /* Grid pulsation in radians per second */
 static constexpr float32_t W0 = 2.0F * PI * F0;
 /* Load resistance in ohms */
-static constexpr float32_t LOAD_RESISTANCE = 10.0F;
+static constexpr float32_t LOAD_RESISTANCE = 8.0F;
 /* Maximum current for overcurrent protection in amps */
 static constexpr float32_t MAX_CURRENT = 8.0F;
 /* Size of the scope buffer for data recording */
@@ -146,6 +146,8 @@ static float32_t I1_low_value;
 static float32_t I2_low_value;
 /* [V] High-side raw measurement of voltage */
 static float32_t V_high;
+/* [V] High-side raw measurement of current */
+static float32_t I_high;
 /* [V] Further filtered high-side voltage for control */
 static float32_t V_high_filt;
 /* [V] Measured grid voltage from the difference of low-side measurements */
@@ -156,7 +158,7 @@ static float32_t Igrid_meas;
 static float32_t meas_data;
 
 /* [V] Amplitude of the local teaching sine wave */
-static float32_t local_voltage_amplitude = 12.0F;
+static float32_t local_voltage_amplitude = 48.0F;
 /* [rad] Phase angle estimated by the inverter controller */
 static float32_t inverter_theta;
 /* [V] Instantaneous local grid voltage from the teaching sine */
@@ -171,7 +173,7 @@ static dqo_t Vdq_output;
 /* [V] DQ-axis voltage reference for the forming controller */
 static dqo_t Vdq_ref;
 /* [V] maximum DQ-axis voltage reference for the forming controller */
-static dqo_t Vdq_ref_max = {30.0F, 30.0F, 0.0F};
+static dqo_t Vdq_ref_max = {40.0F, 40.0F, 0.0F};
 /* [A] DQ-axis current in the synchronous reference frame */
 static dqo_t Idq;
 /* [A] DQ-axis current reference delta for control adjustments */
@@ -377,7 +379,8 @@ void setup_scope()
     scope.connectChannel(omega, "omega");
     scope.connectChannel(phase_shift_deg, "phase_shift");
     scope.connectChannel(state_mode_scope, "state");
-    scope.connectChannel(h3_amplitude, "h3_amplitude");
+    // scope.connectChannel(h3_amplitude, "h3_amplitude");
+    scope.connectChannel(I_high, "Idc");
     scope.set_delay(0.5F);
     scope.set_trigger(a_trigger);
     scope.start();
@@ -402,6 +405,9 @@ void read_measurements()
 
     meas_data = shield.sensors.getLatestValue(V_HIGH);
     if (meas_data != NO_VALUE) V_high = meas_data;
+
+    meas_data = shield.sensors.getLatestValue(I_HIGH);
+    if (meas_data != NO_VALUE) I_high = meas_data;
 
     V_high_filt = vHighFilter.calculateWithReturn(V_high);
 
