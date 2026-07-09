@@ -82,6 +82,10 @@ void read_measurements();
 bool overcurrent_detected();
 /* Accumulates squared currents and refreshes the RMS values once per grid period */
 void update_rms();
+/* Tracks the peak current over a grid period and derives RMS as peak/sqrt(2) */
+void update_rms_peak();
+/* Tracks an EMA/IIR estimate of the mean-square current and derives RMS continuously */
+void update_rms_ema();
 /* Tracks V_high min/max/mean and refreshes the bus voltage ripple once per grid period */
 void update_voltage_ripple();
 
@@ -108,10 +112,16 @@ static constexpr float32_t W0 = 2.0F * PI * F0;
 static constexpr float32_t MAX_CURRENT = 8.0F;
 /* Number of critical task samples in one grid period (TS * RMS_WINDOW_SAMPLES = 1/F0) */
 static constexpr uint32_t RMS_WINDOW_SAMPLES = static_cast<uint32_t>(1.0F / (F0 * TS) + 0.5F);
+/* sqrt(2), used to convert a sinusoid peak value into an RMS value */
+static constexpr float32_t SQRT2 = 1.41421356F;
+/* [s] Time constant of the EMA/IIR mean-square RMS estimator (~1 grid period) */
+static constexpr float32_t RMS_EMA_TAU = 0.02F;
+/* Discrete EMA gain derived from RMS_EMA_TAU and the control task period */
+static constexpr float32_t RMS_EMA_ALPHA = TS / RMS_EMA_TAU;
 /* Size of the scope buffer for data recording */
 static constexpr uint32_t SCOPE_BUFFER_SIZE = 1024;
 /* Number of channels recorded in the scope for diagnostics */
-static constexpr uint8_t SCOPE_CHANNEL_COUNT = 17;
+static constexpr uint8_t SCOPE_CHANNEL_COUNT = 21;
 
 /* State of the PWM outputs */
 static bool pwm_enable = false;
@@ -156,6 +166,26 @@ static float32_t I1_sum_sq;
 static float32_t I2_sum_sq;
 /* Number of samples accumulated in the current RMS window */
 static uint32_t rms_sample_count;
+
+/* [A] RMS value of current 1 estimated as peak/sqrt(2), refreshed once per grid period */
+static float32_t I1_rms_peak;
+/* [A] RMS value of current 2 estimated as peak/sqrt(2), refreshed once per grid period */
+static float32_t I2_rms_peak;
+/* [A] Running peak (max absolute value) of I1_low_value over the current grid period */
+static float32_t I1_peak_running;
+/* [A] Running peak (max absolute value) of I2_low_value over the current grid period */
+static float32_t I2_peak_running;
+/* Number of samples accumulated in the current peak-detection window */
+static uint32_t peak_sample_count;
+
+/* [A] RMS value of current 1 estimated from an EMA of I1_low_value^2, updated every cycle */
+static float32_t I1_rms_ema;
+/* [A] RMS value of current 2 estimated from an EMA of I2_low_value^2, updated every cycle */
+static float32_t I2_rms_ema;
+/* [A^2] EMA of I1_low_value^2 */
+static float32_t I1_meanSq_ema;
+/* [A^2] EMA of I2_low_value^2 */
+static float32_t I2_meanSq_ema;
 
 /* [V] Peak-to-peak ripple of V_high over the last grid period */
 static float32_t Vhigh_ripple_pp;
@@ -274,7 +304,7 @@ void update_teaching_sine()
     sine_modulation = ot_sin(phi_m);
     local_vgrid = Mp_init * sine;
     local_modulation = Mp * sine_modulation;
-    delta_duty_cycle = 0.5F + ( Mp * sine / 2.0F );
+    delta_duty_cycle = 0.5F + ( Mp * sine_modulation / 2.0F );
 }
 
 /**
@@ -329,6 +359,10 @@ void setup_scope()
     scope.connectChannel(I2_low_value, "I2_low_value");
     scope.connectChannel(I1_rms, "I1_rms");
     scope.connectChannel(I2_rms, "I2_rms");
+    scope.connectChannel(I1_rms_peak, "I1_rms_peak");
+    scope.connectChannel(I2_rms_peak, "I2_rms_peak");
+    scope.connectChannel(I1_rms_ema, "I1_rms_ema");
+    scope.connectChannel(I2_rms_ema, "I2_rms_ema");
     scope.connectChannel(Vhigh_ripple_pp, "Vhigh_ripple_pp");
     scope.connectChannel(Vhigh_ripple_pct, "Vhigh_ripple_pct");
     scope.connectChannel(Vgrid_meas, "Vgrid");
@@ -401,6 +435,45 @@ void update_rms()
         I2_sum_sq = 0.0F;
         rms_sample_count = 0;
     }
+}
+
+/**
+ * @brief Tracks the peak current over a grid period and derives RMS as peak/sqrt(2).
+ *
+ * Valid only if I1_low_value/I2_low_value are close to pure sinusoids: no sqrt() is
+ * used, but a single noise spike or harmonic distortion biases the result directly.
+ */
+void update_rms_peak()
+{
+    float32_t abs_I1 = fabsf(I1_low_value);
+    float32_t abs_I2 = fabsf(I2_low_value);
+    if (abs_I1 > I1_peak_running) I1_peak_running = abs_I1;
+    if (abs_I2 > I2_peak_running) I2_peak_running = abs_I2;
+    peak_sample_count++;
+
+    if (peak_sample_count >= RMS_WINDOW_SAMPLES) {
+        I1_rms_peak = I1_peak_running / SQRT2;
+        I2_rms_peak = I2_peak_running / SQRT2;
+        I1_peak_running = 0.0F;
+        I2_peak_running = 0.0F;
+        peak_sample_count = 0;
+    }
+}
+
+/**
+ * @brief Tracks an EMA/IIR estimate of the mean-square current and derives RMS continuously.
+ *
+ * Same discretization as LowPassFirstOrderFilter (see filters.cpp), applied to I^2:
+ * meanSq settles toward the true mean square with time constant RMS_EMA_TAU. sqrt() is
+ * taken every call, so this trades a smooth, continuously updated output for far more
+ * sqrtf() calls than update_rms()/update_rms_peak() (once per cycle vs. once per window).
+ */
+void update_rms_ema()
+{
+    I1_meanSq_ema += RMS_EMA_ALPHA * (I1_low_value * I1_low_value - I1_meanSq_ema);
+    I2_meanSq_ema += RMS_EMA_ALPHA * (I2_low_value * I2_low_value - I2_meanSq_ema);
+    I1_rms_ema = sqrtf(I1_meanSq_ema);
+    I2_rms_ema = sqrtf(I2_meanSq_ema);
 }
 
 /**
@@ -539,7 +612,9 @@ void loop_application_task()
         dump_scope_datas(scope);
         is_downloading = false;
     } else {
-        printk("state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f:I1rms %.3f:I2rms %.3f:Vpp %.3f:Vpp%% %.2f\n",
+        printk("state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f"
+               ":I1rms %.3f:I2rms %.3f:I1rmsPk %.3f:I2rmsPk %.3f:I1rmsEma %.3f:I2rmsEma %.3f"
+               ":Vpp %.3f:Vpp%% %.2f\n",
                mode,
                static_cast<double>(V_high_filt),
                static_cast<double>(Vgrid_meas),
@@ -549,6 +624,10 @@ void loop_application_task()
                static_cast<double>(duty_cycle_2),
                static_cast<double>(I1_rms),
                static_cast<double>(I2_rms),
+               static_cast<double>(I1_rms_peak),
+               static_cast<double>(I2_rms_peak),
+               static_cast<double>(I1_rms_ema),
+               static_cast<double>(I2_rms_ema),
                static_cast<double>(Vhigh_ripple_pp),
                static_cast<double>(Vhigh_ripple_pct));
     }
@@ -564,6 +643,8 @@ void loop_critical_task()
     critical_task_counter++;
     read_measurements();
     update_rms();
+    update_rms_peak();
+    update_rms_ema();
     update_voltage_ripple();
     update_teaching_sine();
 
