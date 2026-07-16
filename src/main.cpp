@@ -27,6 +27,7 @@
  */
 
 /* --------------OWNTECH APIs---------------------------------- */
+#include "trigo.h"
 #include "SpinAPI.h"
 #include "TaskAPI.h"
 #include "ShieldAPI.h"
@@ -45,6 +46,23 @@ void loop_critical_task();
 /* --------------USER VARIABLES DECLARATIONS------------------- */
 static uint32_t dac_value;
 static uint32_t critical_task_counter = 0;
+
+/* Control task period in microseconds */
+static constexpr uint32_t CONTROL_TASK_PERIOD_US = 100;
+/* Control task period in seconds */
+static constexpr float32_t TS = CONTROL_TASK_PERIOD_US * 1.0e-6F;
+/* Fallback DC bus voltage in volts before sensing is valid */
+static constexpr float32_t DC_BUS_FALLBACK = 20.0F;
+/* Grid frequency in hertz */
+static constexpr float32_t F0 = 50.0F;
+/* Grid pulsation in radians per second */
+static constexpr float32_t W0 = 2.0F * PI * F0;
+/* [V] Amplitude of the local teaching sine wave */
+static float32_t Mp = 0.8F;
+/* [rad] Phase angle of the local teaching sine wave */
+static float32_t teaching_theta;
+/* [No unit] Instantaneous value of the local teaching sine wave */
+static float32_t sine;
 
 /* --------------SETUP FUNCTIONS------------------------------- */
 
@@ -109,7 +127,7 @@ void loop_background_task()
  */
 void loop_critical_task()
 {
-    
+    /*
     if (critical_task_counter >= 100) {
         if (dac_value <= 50){
             dac_value = 4090;
@@ -120,6 +138,14 @@ void loop_critical_task()
         
         critical_task_counter = 0;
     }
+    */
+
+    teaching_theta = ot_modulo_2pi(teaching_theta + W0 * TS);
+    sine = ot_sin(teaching_theta);
+
+    dac_value = (0.5F + ( Mp * sine / 2.0F )) * 4096;
+
+    // dac_value = (dac_value + 100) % 4096;
     
     spin.dac.setConstValue(2, 1, dac_value);
     critical_task_counter++;
