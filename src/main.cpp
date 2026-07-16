@@ -203,7 +203,7 @@ static float32_t Vhigh_sum;
 static uint32_t vripple_sample_count;
 
 /* [V] Amplitude of the local teaching sine wave */
-static float32_t Mp_init = 0.8F;
+static float32_t Mp_AC_source = 1.0F;
 /* [V] Amplitude of the local teaching sine wave */
 static float32_t Mp = 0.8F;
 /* [rad] Phase angle of the local teaching sine wave */
@@ -305,9 +305,10 @@ void update_teaching_sine()
     phi_m = ot_modulo_2pi(phi_m + W0 * TS);
     sine = ot_sin(teaching_theta);
     sine_modulation = ot_sin(phi_m);
-    local_vgrid = Mp_init * sine;
-    local_modulation = Mp * sine_modulation;
+    // local_vgrid = Mp_AC_source * sine;
+    // local_modulation = Mp * sine_modulation;
     delta_duty_cycle = 0.5F + ( Mp * sine_modulation / 2.0F );
+    dac_value = (0.52F + ( Mp_AC_source * sine / 2.0F )) * 4000;
 }
 
 /**
@@ -542,8 +543,10 @@ void loop_communication_task()
             printk("|     open-loop sine PWM                 |\n");
             printk("|     i : idle                           |\n");
             printk("|     p : power                          |\n");
-            printk("|     u/j : phi +/- 0.1 %                |\n");
+            printk("|     u/j : phi +/- 0.05 rad             |\n");
+            printk("|     u/j : phi +/- 0.01 rad             |\n");
             printk("|     d/c : Mp +/- 1 %                   |\n");
+            printk("|     f/v : Mp +/- 0.1 %                 |\n");
             printk("|     r : retrieve scope data            |\n");
             printk("|     t : trigger scope data             |\n");
             printk("|________________________________________|\n\n");
@@ -563,11 +566,23 @@ void loop_communication_task()
         case 'j':
             adjust_phase(-0.05F);
             break;
+        case 'o':
+            adjust_phase(0.01F);
+            break;
+        case 'l':
+            adjust_phase(-0.01F);
+            break;
         case 'd':
             adjust_amplitude(0.01F);
             break;
         case 'c':
             adjust_amplitude(-0.01F);
+            break;
+        case 'f':
+            adjust_amplitude(0.001F);
+            break;
+        case 'v':
+            adjust_amplitude(-0.001F);
             break;
         case 'r':
             is_downloading = true;
@@ -655,7 +670,7 @@ void loop_critical_task()
     update_voltage_ripple();
     update_teaching_sine();
 
-    dac_value = delta_duty_cycle * 4096;
+    // dac_value = delta_duty_cycle * 4000;
     spin.dac.setConstValue(2, 1, dac_value);
 
     if (overcurrent_detected()) {
