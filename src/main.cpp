@@ -234,6 +234,9 @@ static uint32_t critical_task_counter;
 static LowPassFirstOrderFilter vHighFilter(TS, 0.1F);
 /* ScopeMimicry instance for recording control variables and diagnostics */
 static ScopeMimicry scope(SCOPE_BUFFER_SIZE, SCOPE_CHANNEL_COUNT);
+
+/* Synchronization variables */
+static uint32_t dac_value;
 /*--------------------------------------------------------------- */
 
 /**********************  SUPPORT FUNCTIONS  ***************************/
@@ -511,8 +514,8 @@ void setup_routine()
     shield.power.setDeadTime(LEG1, 20, 20);
     shield.power.setDeadTime(LEG2, 20, 20);
     shield.sensors.enableDefaultTwistSensors();
-    shield.power.connectCapacitor(LEG1);
-    shield.power.connectCapacitor(LEG2);
+    shield.power.disconnectCapacitor(LEG1);
+    shield.power.disconnectCapacitor(LEG2);
     shield.power.initBuck(LEG1);
     shield.power.initBuck(LEG2);
 
@@ -613,9 +616,13 @@ void loop_application_task()
         is_downloading = false;
     } else {
         printk("state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f"
-               ":I1rms %.3f:I2rms %.3f:I1rmsPk %.3f:I2rmsPk %.3f:I1rmsEma %.3f:I2rmsEma %.3f"
+               ":I1rms %.3f:I2rms %.3f:I1rmsPk %.3f:I2rmsPk %.3f"
                ":Vpp %.3f:Vpp%% %.2f\n",
                mode,
+            //    "state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f"
+            //    ":I1rms %.3f:I2rms %.3f:I1rmsPk %.3f:I2rmsPk %.3f:I1rmsEma %.3f:I2rmsEma %.3f"
+            //    ":Vpp %.3f:Vpp%% %.2f\n",
+            //    mode,
                static_cast<double>(V_high_filt),
                static_cast<double>(Vgrid_meas),
                static_cast<double>(local_vgrid),
@@ -626,8 +633,8 @@ void loop_application_task()
                static_cast<double>(I2_rms),
                static_cast<double>(I1_rms_peak),
                static_cast<double>(I2_rms_peak),
-               static_cast<double>(I1_rms_ema),
-               static_cast<double>(I2_rms_ema),
+            //    static_cast<double>(I1_rms_ema),
+            //    static_cast<double>(I2_rms_ema),
                static_cast<double>(Vhigh_ripple_pp),
                static_cast<double>(Vhigh_ripple_pct));
     }
@@ -644,9 +651,12 @@ void loop_critical_task()
     read_measurements();
     update_rms();
     update_rms_peak();
-    update_rms_ema();
+    // update_rms_ema();
     update_voltage_ripple();
     update_teaching_sine();
+
+    dac_value = delta_duty_cycle * 4096;
+    spin.dac.setConstValue(2, 1, dac_value);
 
     if (overcurrent_detected()) {
         mode = ERRORMODE;
