@@ -109,7 +109,9 @@ static constexpr float32_t F0 = 50.0F;
 /* Grid pulsation in radians per second */
 static constexpr float32_t W0 = 2.0F * PI * F0;
 /* Maximum current for overcurrent protection in amps */
-static constexpr float32_t MAX_CURRENT = 8.0F;
+static constexpr float32_t MAX_CURRENT = 10.0F;
+/* Maximum current for overcurrent protection in amps */
+static constexpr float32_t MAX_CURRENT_OPERATION = 2.0F;
 /* Number of critical task samples in one grid period (TS * RMS_WINDOW_SAMPLES = 1/F0) */
 static constexpr uint32_t RMS_WINDOW_SAMPLES = static_cast<uint32_t>(1.0F / (F0 * TS) + 0.5F);
 /* sqrt(2), used to convert a sinusoid peak value into an RMS value */
@@ -203,11 +205,11 @@ static float32_t Vhigh_sum;
 static uint32_t vripple_sample_count;
 
 /* [V] Amplitude of the local teaching sine wave */
-static float32_t Mp_AC_source = 1.0F;
+static float32_t Mp_AC_source = 0.0F;
 /* [V] Amplitude of the local teaching sine wave */
-static float32_t Mp = 0.8F;
+static float32_t Mp = 0.0F;
 /* [rad] Phase angle of the local teaching sine wave */
-static float32_t teaching_theta;
+static float32_t phi_AC_source;
 /* [rad] Phase angle of the reference duty cycle sine wave */
 static float32_t phi_m;
 /* [No unit] Instantaneous value of the local teaching sine wave */
@@ -301,12 +303,10 @@ void stop_pwm_outputs()
  */
 void update_teaching_sine()
 {
-    teaching_theta = ot_modulo_2pi(teaching_theta + W0 * TS);
+    phi_AC_source = ot_modulo_2pi(phi_AC_source + W0 * TS);
     phi_m = ot_modulo_2pi(phi_m + W0 * TS);
-    sine = ot_sin(teaching_theta);
+    sine = ot_sin(phi_AC_source);
     sine_modulation = ot_sin(phi_m);
-    // local_vgrid = Mp_AC_source * sine;
-    // local_modulation = Mp * sine_modulation;
     delta_duty_cycle = 0.5F + ( Mp * sine_modulation / 2.0F );
     dac_value = (0.52F + ( Mp_AC_source * sine / 2.0F )) * 4000;
 }
@@ -339,19 +339,37 @@ void dump_scope_datas(ScopeMimicry &scope_to_dump)
 /**
  * @brief Adjusts the local sine voltage amplitude used by the open-loop PWM.
  */
-void adjust_amplitude(float32_t step)
+void adjust_amplitude_converter(float32_t step)
 {
     Mp =
         saturate(Mp + step, 0.0F, 1.0F);
 }
 
 /**
+ * @brief Adjusts the local sine voltage amplitude used by the open-loop PWM.
+ */
+void adjust_amplitude_ACsource(float32_t step)
+{
+    Mp_AC_source =
+        saturate(Mp_AC_source + step, 0.0F, 1.0F);
+}
+
+/**
  * @brief Adjusts the local sine voltage phase used by the open-loop PWM.
  */
-void adjust_phase(float32_t step)
+void adjust_phase_converter(float32_t step)
 {
     phi_m =
         ot_modulo_2pi(phi_m + step);
+}
+
+/**
+ * @brief Adjusts the local sine voltage phase used by the open-loop PWM.
+ */
+void adjust_phase_ACsource(float32_t step)
+{
+    phi_AC_source =
+        ot_modulo_2pi(phi_AC_source + step);
 }
 
 /**
@@ -410,6 +428,9 @@ void read_measurements()
 
     V_high_filt = vHighFilter.calculateWithReturn(V_high);
     Vgrid_meas = V1_low_value - V2_low_value;
+
+    I1_low_value = I1_low_value -0.1;
+    I2_low_value = I2_low_value -0.15;
 }
 
 /**
@@ -421,6 +442,17 @@ bool overcurrent_detected()
            I1_low_value < -MAX_CURRENT ||
            I2_low_value > MAX_CURRENT ||
            I2_low_value < -MAX_CURRENT;
+}
+
+/**
+ * @brief Checks both measured currents against the protection threshold.
+ */
+bool overcurrent_detected_operation()
+{
+    return I1_low_value > MAX_CURRENT_OPERATION ||
+           I1_low_value < -MAX_CURRENT_OPERATION ||
+           I2_low_value > MAX_CURRENT_OPERATION ||
+           I2_low_value < -MAX_CURRENT_OPERATION;
 }
 
 /**
@@ -543,10 +575,10 @@ void loop_communication_task()
             printk("|     open-loop sine PWM                 |\n");
             printk("|     i : idle                           |\n");
             printk("|     p : power                          |\n");
-            printk("|     u/j : phi +/- 0.05 rad             |\n");
             printk("|     u/j : phi +/- 0.01 rad             |\n");
+            printk("|     o/l : phi_ACsource +/- 0.01 rad    |\n");
             printk("|     d/c : Mp +/- 1 %                   |\n");
-            printk("|     f/v : Mp +/- 0.1 %                 |\n");
+            printk("|     f/v : Mp_ACsource +/- 1 %          |\n");
             printk("|     r : retrieve scope data            |\n");
             printk("|     t : trigger scope data             |\n");
             printk("|________________________________________|\n\n");
@@ -558,31 +590,32 @@ void loop_communication_task()
             if (!is_downloading) {
                 scope.start();
                 mode_asked = POWERMODE;
+                critical_task_counter = 0;
             }
             break;
         case 'u':
-            adjust_phase(0.05F);
+            adjust_phase_converter(0.01F);
             break;
         case 'j':
-            adjust_phase(-0.05F);
+            adjust_phase_converter(-0.01F);
             break;
         case 'o':
-            adjust_phase(0.01F);
+            adjust_phase_ACsource(0.01F);
             break;
         case 'l':
-            adjust_phase(-0.01F);
+            adjust_phase_ACsource(-0.01F);
             break;
         case 'd':
-            adjust_amplitude(0.01F);
+            adjust_amplitude_converter(0.01F);
             break;
         case 'c':
-            adjust_amplitude(-0.01F);
+            adjust_amplitude_converter(-0.01F);
             break;
         case 'f':
-            adjust_amplitude(0.001F);
+            adjust_amplitude_ACsource(0.01F);
             break;
         case 'v':
-            adjust_amplitude(-0.001F);
+            adjust_amplitude_ACsource(-0.01F);
             break;
         case 'r':
             is_downloading = true;
@@ -630,9 +663,8 @@ void loop_application_task()
         dump_scope_datas(scope);
         is_downloading = false;
     } else {
-        printk("state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f"
-               ":I1rms %.3f:I2rms %.3f:I1rmsPk %.3f:I2rmsPk %.3f"
-               ":Vpp %.3f:Vpp%% %.2f\n",
+        printk("state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:Mp %.2f:Mp_src %.2f:phi_m %.2f:phi_src %.2f"
+                ":d1 %.3f:d2 %.3f\n",
                mode,
             //    "state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f"
             //    ":I1rms %.3f:I2rms %.3f:I1rmsPk %.3f:I2rmsPk %.3f:I1rmsEma %.3f:I2rmsEma %.3f"
@@ -642,16 +674,19 @@ void loop_application_task()
                static_cast<double>(Vgrid_meas),
                static_cast<double>(local_vgrid),
                static_cast<double>(Mp),
+               static_cast<double>(Mp_AC_source),
+               static_cast<double>(phi_m),
+               static_cast<double>(phi_AC_source),
                static_cast<double>(duty_cycle_1),
-               static_cast<double>(duty_cycle_2),
-               static_cast<double>(I1_rms),
-               static_cast<double>(I2_rms),
-               static_cast<double>(I1_rms_peak),
-               static_cast<double>(I2_rms_peak),
+               static_cast<double>(duty_cycle_2));
+            //    static_cast<double>(I1_rms),
+            //    static_cast<double>(I2_rms),
+            //    static_cast<double>(I1_rms_peak),
+            //    static_cast<double>(I2_rms_peak),
             //    static_cast<double>(I1_rms_ema),
             //    static_cast<double>(I2_rms_ema),
-               static_cast<double>(Vhigh_ripple_pp),
-               static_cast<double>(Vhigh_ripple_pct));
+            //    static_cast<double>(Vhigh_ripple_pp),
+            //    static_cast<double>(Vhigh_ripple_pct));
     }
 
     task.suspendBackgroundMs(100);
@@ -664,8 +699,8 @@ void loop_critical_task()
 {
     critical_task_counter++;
     read_measurements();
-    update_rms();
-    update_rms_peak();
+    // update_rms();
+    // update_rms_peak();
     // update_rms_ema();
     update_voltage_ripple();
     update_teaching_sine();
@@ -680,6 +715,15 @@ void loop_critical_task()
     if (mode == POWERMODE) {
         apply_complementary_duty(delta_duty_cycle);
         start_pwm_outputs();
+
+        if (critical_task_counter > 20 && overcurrent_detected()) {
+            mode = ERRORMODE;
+        }
+        if (critical_task_counter > 1000 && overcurrent_detected_operation()) {
+            mode = ERRORMODE;
+            trigger = true;
+        }
+
     } else {
         stop_pwm_outputs();
         spin.led.turnOff();
