@@ -26,14 +26,29 @@
 % group, reads a single measurement and the whole group, and writes a
 % Config value.
 
-%% clear
-
-clear all
-
 %% code start
 MEAS = "Measurements";
 
-ts = ThingSetTools("COM38");
+% Explicit candidate ports, skipping auto-detection: on this machine,
+% serialportlist()/findPorts() enumerate several virtual "Standard Serial
+% over Bluetooth link" COM ports that Windows can take tens of seconds to
+% respond about, making auto-detection very slow. The board's console and
+% ThingSet-shell interfaces were found at COM39 and COM40 (both
+% USB\VID_2FE3&PID_0100, via Device Manager / Win32_PnPEntity) - update
+% these if the board enumerates differently on your machine, or pass ""
+% to fall back to auto-detection.
+KNOWN_PORTS = ["COM39", "COM40"];
+
+% Reuse an already-open connection across re-runs of this section instead
+% of reconnecting every time: closing and immediately reopening the same
+% USB-CDC port (what a bare `clear all` + reconnect does) can race the
+% Windows driver's release of the port and fail with ConnectionFailed -
+% see ThingSetTools.connect(). Run `clear ts` (or `ts.close()`) first if
+% you actually want to force a fresh connection (e.g. after a board
+% reset).
+if ~exist("ts", "var") || ~isvalid(ts) || ~ts.isOpen()
+    ts = ThingSetTools(KNOWN_PORTS, 115200, 1.0, "2FE3", "", true);
+end
 ts.discover();
 
 % Auto-build {short_name: full_path} for every measurement, e.g.
@@ -65,7 +80,7 @@ disp(ts.read(measurements("V1Low")));
 % Flush all measurements and their current values at once.
 disp(ts.read(MEAS));
 
-ts.write("Config", struct("wBlinkPeriod_s", 0.1));
+ts.write("Config", struct("wBlinkPeriod_s", 0.5));
 
 %% close connection
 ts.close();
