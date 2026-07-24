@@ -52,6 +52,8 @@
 /* "Config" group ID (child of root) and its one writable item's ID. */
 #define ID_CONFIG              0x6
 #define ID_CONFIG_BLINK_PERIOD 0x60
+#define ID_CONFIG_MP 0x61
+#define ID_CONFIG_PHIM 0x62
 
 /* Subset bitmask: marks which items get included when a client asks for
  * a named subset of the tree (e.g. periodic reporting). Only one subset
@@ -75,6 +77,10 @@ static float32_t meas_data;
 
 /* Writable over the ThingSet shell: LED blink half-period, in seconds. */
 static float32_t blink_period_s = 1.0f;
+
+/* Writable over the ThingSet shell: Modulation amplitude and phase, in pu and rad. */
+static float32_t Mp = 0.0F;
+static float32_t phi_m;
 
 /* Register the "Measurements" group as a child of the root (ID_ROOT),
  * with its own ID (ID_MEAS) and display name. THINGSET_NO_CALLBACK means
@@ -123,3 +129,9 @@ THINGSET_ADD_GROUP(ID_ROOT, ID_CONFIG, "Config", THINGSET_NO_CALLBACK);
  * blink rate immediately. */
 THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_BLINK_PERIOD, "wBlinkPeriod_s",
                         &blink_period_s, 2, THINGSET_ANY_RW, SUBSET_SER);
+
+THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_MP, "wMp",
+                        &Mp, 2, THINGSET_ANY_RW, SUBSET_SER);
+
+THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_PHIM, "wphi_m",
+                        &phi_m, 2, THINGSET_ANY_RW, SUBSET_SER);

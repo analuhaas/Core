@@ -364,6 +364,7 @@ classdef ThingSetTools < handle
                 winMap = ThingSetTools.readUsbIdsWindows(verbose);
             end
             ports = string.empty;
+            mis = [];
             for i = 1:numel(allPorts)
                 info = ThingSetTools.readUsbIds(allPorts(i), verbose, winMap);
                 if isempty(info)
@@ -376,7 +377,38 @@ classdef ThingSetTools < handle
                 end
                 if match
                     ports(end+1) = allPorts(i); %#ok<AGROW>
+                    if isfield(info, "mi")
+                        mis(end+1) = info.mi; %#ok<AGROW>
+                    else
+                        mis(end+1) = NaN; %#ok<AGROW>
+                    end
                 end
+            end
+
+            % USB-composite OwnTech boards expose their console/upload
+            % interface as USB interface 0 (Windows DeviceID "...&MI_00"),
+            % sharing the same VID/PID as the actual ThingSet-shell
+            % interface (a higher MI number) - see
+            % owntech/scripts/pre_bootloader_serial.py, which relies on
+            % the same "lowest interface number = console" convention to
+            % pick the upload port. connect() already avoids the
+            % disruptive DTR/RTS mismatch (see there for why that matters
+            % on this board), so opening the console port shouldn't reset
+            % it anymore - but there's still no reason for a ThingSet
+            % client to talk to the console/upload interface, and doing
+            % so risks colliding with an actual interactive console
+            % session or an in-progress firmware upload. So: when more
+            % than one candidate is found
+            % and their USB interface numbers are known, drop the
+            % lowest-numbered one rather than probe the console.
+            if numel(ports) > 1 && any(~isnan(mis))
+                mis(isnan(mis)) = Inf;
+                [~, consoleIdx] = min(mis);
+                if verbose
+                    ThingSetTools.printLog("findPorts: excluding %s (USB interface %d, likely the console/upload port)", ...
+                        ports(consoleIdx), mis(consoleIdx));
+                end
+                ports(consoleIdx) = [];
             end
         end
     end
@@ -478,7 +510,17 @@ classdef ThingSetTools < handle
                 if isempty(nameTok) || isempty(idTok)
                     continue
                 end
-                map(nameTok{1}) = struct("vid", string(idTok{1}), "pid", string(idTok{2}));
+                % USB interface number, e.g. "...&MI_02\..." -> 2. Only
+                % present for composite USB devices (multiple interfaces
+                % under one VID/PID) - see the console-port exclusion in
+                % findPorts().
+                miTok = regexp(e.DeviceID, 'MI_(\d+)', 'tokens', 'once');
+                if isempty(miTok)
+                    mi = NaN;
+                else
+                    mi = str2double(miTok{1});
+                end
+                map(nameTok{1}) = struct("vid", string(idTok{1}), "pid", string(idTok{2}), "mi", mi);
             end
             if verbose
                 ThingSetTools.printLog("readUsbIdsWindows: found VID/PID for %d of the queried COM port(s)", map.Count);
@@ -513,15 +555,11 @@ classdef ThingSetTools < handle
 
         function releaseSerial(obj)
             % Explicitly delete()s the underlying serialport object
-            % rather than just dropping the reference (obj.Serial = []).
-            % On Windows, a COM port belonging to a USB-CDC device (as
-            % opposed to real hardware UART) can stay claimed for a short
-            % time after close if release is left to MATLAB's handle
-            % garbage collection instead of forced immediately - the
-            % next serialport() open on the same port then hangs for
-            % ~60s before failing with ConnectionFailed. See the retry
-            % loop in connect() for the corresponding open-side
-            % mitigation.
+            % rather than just dropping the reference (obj.Serial = []),
+            % so the OS-level port is released as soon as possible
+            % instead of waiting on MATLAB's handle garbage collection -
+            % see the retry loop in connect() for the corresponding
+            % open-side mitigation.
             if ~isempty(obj.Serial)
                 try
                     delete(obj.Serial);
@@ -535,30 +573,62 @@ classdef ThingSetTools < handle
         function connect(obj, port, baudRate, timeoutSeconds)
             obj.log("opening %s at %d baud, timeout=%.2fs", port, baudRate, timeoutSeconds);
             obj.Port = port;
-            % FlowControl is pinned to "none" (not just left at its
-            % default) because some Windows COM ports - notably
-            % Bluetooth-over-serial and other virtual ports - can enable
-            % hardware flow control at the driver level. When that
-            % happens, write() blocks forever waiting for CTS that never
-            % comes, and MATLAB's Timeout property does not bound that
-            % wait (it only governs read()). Explicit "none" avoids the
-            % hang outright rather than relying on the port's default.
+            % Do NOT pass "FlowControl" to serialport(), even "none" -
+            % this is deliberate, not an oversight. This board uses the
+            % classic two-transistor "auto-program" reset circuit found
+            % on ESP32-style dev boards, where DTR and RTS together
+            % select the mode: DTR=1/RTS=1 (or 0/0) is a normal, harmless
+            % connection, but DTR=1/RTS=0 - the two lines MISMATCHED -
+            % drives the board into a reset/bootloader state. The running
+            % firmware halts immediately (a heartbeat LED stops dead) and
+            % both of the board's USB-CDC interfaces then fail at the OS
+            % level until it's power-cycled. serialport() defaults
+            % DataTerminalReady=true and controls RTS only indirectly
+            % through FlowControl; explicitly passing FlowControl="none"
+            % (as an earlier version of this file did) makes Windows
+            % apply RTS_CONTROL_DISABLE while DTR stays enabled - exactly
+            % the disruptive mismatch - and serialport() has no direct
+            % RequestToSend property to independently pin RTS back to
+            % match, unlike the legacy serial() object. Leaving
+            % FlowControl untouched keeps RTS matched to DTR (both
+            % effectively on), mirroring the working Python reference
+            % implementation (thingset_tools.py via pyserial, which opens
+            % with dtr=True/rts=True together - confirmed by inspecting
+            % pyserial's serialwin32.py).
+            %
+            % An earlier attempt "fixed" this by switching to the legacy
+            % serial() object (which does let DataTerminalReady and
+            % RequestToSend be pinned explicitly, before the port opens)
+            % - don't go back to that. It turned out to be built on a
+            % Java library (gnu.io.RXTXPort/RXTX) whose fopen() throws
+            % java.lang.NoClassDefFoundError on this machine while
+            % internally (and unavoidably) reconfiguring flow control on
+            % every open regardless of what's requested, and separately,
+            % its own port-open error path re-triggers the same slow
+            % Bluetooth-virtual-port WMI enumeration described in
+            % findPorts() above, taking ~60s per attempt even against a
+            % nonexistent port. Neither issue is present with
+            % serialport(). If DTR/RTS problems resurface, the fix is to
+            % avoid touching FlowControl-adjacent properties here, not to
+            % reach for legacy serial() again - verify any change against
+            % real hardware with someone watching the board's heartbeat
+            % LED.
             %
             % Opening a port that was itself closed moments ago (e.g. a
             % re-run of a script right after the previous run's
             % ts.close()) can transiently fail with ConnectionFailed on
             % Windows if the USB-CDC driver hasn't fully released the
-            % port yet. This is usually a sub-second race, but MATLAB's
-            % own ConnectionFailed can also take up to ~60s to surface,
-            % so only one retry is attempted here - a persistent failure
-            % is more likely a genuinely busy/missing port than something
-            % a longer backoff would fix (see the "reuse the existing
+            % port yet. This is usually a sub-second race, but
+            % ConnectionFailed can also take up to ~60s to surface, so
+            % only one retry is attempted here - a persistent failure is
+            % more likely a genuinely busy/missing port than something a
+            % longer backoff would fix (see the "reuse the existing
             % connection" pattern in thingset_example.m, which avoids
             % this close/reopen cycle entirely across re-runs).
             maxAttempts = 2;
             for attempt = 1:maxAttempts
                 try
-                    obj.Serial = serialport(port, baudRate, "Timeout", timeoutSeconds, "FlowControl", "none");
+                    obj.Serial = serialport(port, baudRate, "Timeout", timeoutSeconds);
                     break
                 catch ME
                     if ~strcmp(ME.identifier, "serialport:serialport:ConnectionFailed") || attempt == maxAttempts

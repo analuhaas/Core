@@ -29,15 +29,23 @@
 %% code start
 MEAS = "Measurements";
 
-% Explicit candidate ports, skipping auto-detection: on this machine,
+% Explicit candidate port, skipping auto-detection: on this machine,
 % serialportlist()/findPorts() enumerate several virtual "Standard Serial
 % over Bluetooth link" COM ports that Windows can take tens of seconds to
-% respond about, making auto-detection very slow. The board's console and
-% ThingSet-shell interfaces were found at COM39 and COM40 (both
-% USB\VID_2FE3&PID_0100, via Device Manager / Win32_PnPEntity) - update
-% these if the board enumerates differently on your machine, or pass ""
-% to fall back to auto-detection.
-KNOWN_PORTS = ["COM39", "COM40"];
+% respond about, making auto-detection very slow. The board exposes two
+% USB\VID_2FE3&PID_0100 interfaces - COM39 (MI_00, the lowest-numbered
+% interface) is the CONSOLE/UPLOAD port, COM40 (MI_02) is the dedicated
+% ThingSet-shell port (see owntech/scripts/pre_bootloader_serial.py,
+% which uses the same MI_00-is-console convention to pick the upload
+% port). Only COM40 is listed here on purpose: opening COM39 asserts DTR
+% like any serialport() connection, which appears to trigger the same
+% reset-to-bootloader behavior pre_bootloader_serial.py uses
+% (TouchSerialPort) to flash the board - observed as the running
+% firmware's LED heartbeat stopping the moment ThingSetTools opens it,
+% and both USB interfaces then failing at the OS level until the board
+% is power-cycled. Update the port number if it enumerates differently on
+% your machine, but do not add the console port back to this list.
+KNOWN_PORTS = "";
 
 % Reuse an already-open connection across re-runs of this section instead
 % of reconnecting every time: closing and immediately reopening the same
@@ -80,7 +88,9 @@ disp(ts.read(measurements("V1Low")));
 % Flush all measurements and their current values at once.
 disp(ts.read(MEAS));
 
-ts.write("Config", struct("wBlinkPeriod_s", 0.5));
+ts.write("Config", struct("wBlinkPeriod_s", 0.1));
+ts.write("Config", struct("wMp", 0.6));
+ts.write("Config", struct("wphi_m", 0.018));
 
 %% close connection
 ts.close();

@@ -208,11 +208,11 @@ static uint32_t vripple_sample_count;
 /* [V] Amplitude of the local teaching sine wave */
 static float32_t Mp_AC_source = 0.0F;
 /* [V] Amplitude of the local teaching sine wave */
-static float32_t Mp = 0.0F;
+// static float32_t Mp = 0.0F;
 /* [rad] Phase angle of the local teaching sine wave */
 static float32_t phi_AC_source;
 /* [rad] Phase angle of the reference duty cycle sine wave */
-static float32_t phi_m;
+// static float32_t phi_m;
 /* [No unit] Instantaneous value of the local teaching sine wave */
 static float32_t sine;
 /* [No unit] Instantaneous value of the reference duty cycle sine wave */
@@ -651,13 +651,13 @@ void loop_application_task()
         if (mode_asked == POWERMODE) {
             mode = POWERMODE;
         }
-        spin.led.turnOn();
+        // spin.led.turnOn();
         break;
     case POWERMODE:
         if (mode_asked == IDLEMODE) {
             mode = IDLEMODE;
         }
-        spin.led.toggle();
+        // spin.led.toggle();
         break;
     case ERRORMODE:
         break;
@@ -740,7 +740,7 @@ void loop_critical_task()
 
     } else {
         stop_pwm_outputs();
-        spin.led.turnOff();
+        // spin.led.turnOff();
     }
 
     state_mode_scope = static_cast<float32_t>(mode);

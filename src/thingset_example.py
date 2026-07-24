@@ -57,4 +57,9 @@ print(ts.read(MEAS))
 
 ts.write("Config", {"wBlinkPeriod_s": 0.5})
 
+ts.write("Config", {"wMp": 0.6})
+
+ts.write("Config", {"wphi_m": 0.0185})
+
+
 ts.objects.Config.wBlinkPeriod_s = 1.0
