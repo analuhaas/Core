@@ -76,6 +76,13 @@ static float32_t temp_2_value;
 static float32_t meas_data;
 /* Variable that main.cpp uses to set in which mode the converter is
  * (IDLE, POWER, ERROR) */
+enum ConverterState : uint8_t /* Holds the current state of the inverter */
+{
+    IDLEMODE = 0,  /* Idle mode: stops the converter power */
+    POWERMODE = 1, /* Power mode: drives the H-bridge with sine PWM */
+    ERRORMODE = 3  /* Error mode: indicates an error condition */
+};
+
 static uint8_t mode = IDLEMODE;
 
 /* Writable over the ThingSet shell: LED blink half-period, in seconds. */

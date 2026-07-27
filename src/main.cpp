@@ -38,8 +38,13 @@
 /* From control library */
 #include "trigo.h"
 #include "filters.h"
+#include "transform.h"
 #include "ScopeMimicry.h"
 #include "zephyr/console/console.h"
+
+/* Sogi is not part of the owntech control_library package: vendored
+ * locally from owntech-foundation/single_phase_inverter (src/sogi.h/.cpp). */
+#include "sogi.h"
 
 #define DUTY_MIN 0.1F
 #define DUTY_MAX 0.9F
@@ -69,6 +74,8 @@ void start_pwm_outputs();
 void stop_pwm_outputs();
 /* Advances the local oscillator and updates the sine voltage reference */
 void update_teaching_sine();
+
+void calculate_power();
 /* Applies clamped complementary duty cycles to the H-bridge legs */
 void apply_complementary_duty(float32_t duty);
 /* Streams a completed ScopeMimicry capture over the serial console */
@@ -92,12 +99,6 @@ void update_voltage_ripple();
 
 /*--------------USER VARIABLES DECLARATIONS------------------- */
 
-enum ConverterState : uint8_t /* Holds the current state of the inverter */
-{
-    IDLEMODE = 0,  /* Idle mode: stops the converter power */
-    POWERMODE = 1, /* Power mode: drives the H-bridge with sine PWM */
-    ERRORMODE = 3  /* Error mode: indicates an error condition */
-};
 
 /* Control task period in microseconds */
 static constexpr uint32_t CONTROL_TASK_PERIOD_US = 100;
@@ -119,6 +120,8 @@ static constexpr uint32_t RMS_WINDOW_SAMPLES = static_cast<uint32_t>(1.0F / (F0 
 static constexpr float32_t SQRT2 = 1.41421356F;
 /* [s] Time constant of the EMA/IIR mean-square RMS estimator (~1 grid period) */
 static constexpr float32_t RMS_EMA_TAU = 0.02F;
+/* SOGI resonance gain, shared by the voltage and current SOGI filters */
+static constexpr float32_t Kr = 500.0F;
 /* Discrete EMA gain derived from RMS_EMA_TAU and the control task period */
 static constexpr float32_t RMS_EMA_ALPHA = TS / RMS_EMA_TAU;
 /* Size of the scope buffer for data recording */
@@ -237,6 +240,21 @@ static uint32_t critical_task_counter;
 static LowPassFirstOrderFilter vHighFilter(TS, 0.1F);
 /* ScopeMimicry instance for recording control variables and diagnostics */
 static ScopeMimicry scope(SCOPE_BUFFER_SIZE, SCOPE_CHANNEL_COUNT);
+
+/* SOGI filter extracting the orthogonal (alpha/beta) components of Vgrid_meas */
+static Sogi sogi_v;
+/* SOGI filter extracting the orthogonal (alpha/beta) components of I1_low_value */
+static Sogi sogi_i;
+/* [V] Clarke (alpha/beta) components of the grid voltage, from sogi_v */
+static clarke_t Vab;
+/* [A] Clarke (alpha/beta) components of the grid current, from sogi_i */
+static clarke_t Iab;
+/* [V] dq components of the grid voltage, rotated from Vab by phi_m */
+static dqo_t Vdq;
+/* [A] dq components of the grid current, rotated from Iab by phi_m */
+static dqo_t Idq;
+/* [W, VAR] Active (d) and reactive (q) AC-side power computed from Vdq/Idq */
+static dqo_t power;
 
 /* Synchronization variables */
 static uint32_t dac_value;
@@ -434,6 +452,18 @@ void read_measurements()
     I2_low_value = I2_low_value -0.15;
 }
 
+void calculate_power()
+{
+    Vab = sogi_v.calc(Vgrid_meas,W0);
+    Iab = sogi_i.calc(I1_low_value,W0);
+
+    Vdq = Transform::rotation_to_dqo(Vab, phi_m);
+    Idq = Transform::rotation_to_dqo(Iab, phi_m);
+
+    power.d = 0.5F * (Vdq.d * Idq.d + Vdq.q * Idq.q);
+    power.q = 0.5F * (Idq.d * Vdq.q - Idq.q * Vdq.d);
+}
+
 /**
  * @brief Checks both measured currents against the protection threshold.
  */
@@ -561,6 +591,9 @@ void setup_routine()
     task.startBackground(app_task_number);
     // task.startBackground(com_task_number);
     task.startCritical();
+
+    sogi_v.init(Kr, TS);
+    sogi_i.init(Kr, TS);
 }
 
 /**
@@ -719,6 +752,7 @@ void loop_critical_task()
     // update_rms_ema();
     update_voltage_ripple();
     update_teaching_sine();
+    calculate_power();
 
     // dac_value = delta_duty_cycle * 4000;
     spin.dac.setConstValue(2, 1, dac_value);
