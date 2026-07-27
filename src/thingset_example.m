@@ -69,17 +69,15 @@ for name = ts.fetchChildren(MEAS)
     end
 end
 
-disp(measurements.keys);
-disp(measurements.values);
-
-disp(ts.read(measurements("V1Low")));
-
-% Flush all measurements and their current values at once.
-disp(ts.read(MEAS));
-
 
 %% commands
 
+ts.write("Config", struct("wBlinkPeriod_s", 0.5));
+ts.write("Config", struct("wMp", 0.6));
+ts.write("Config", struct("wphi_m", 0.018));
+
+%% measures
+
 disp(measurements.keys);
 disp(measurements.values);
 
@@ -88,9 +86,6 @@ disp(ts.read(measurements("V1Low")));
 % Flush all measurements and their current values at once.
 disp(ts.read(MEAS));
 
-ts.write("Config", struct("wBlinkPeriod_s", 0.1));
-ts.write("Config", struct("wMp", 0.6));
-ts.write("Config", struct("wphi_m", 0.018));
 
 %% close connection
 ts.close();

@@ -136,18 +136,18 @@ static bool trigger = false;
 /* Variable to store the last received serial character */
 static uint8_t received_serial_char;
 /* Current operating mode of the inverter */
-static uint8_t mode = IDLEMODE;
+// static uint8_t mode = IDLEMODE;
 /* Last requested operating mode from the serial interface */
-static uint8_t mode_asked = IDLEMODE;
+// static uint8_t mode_asked = IDLEMODE;
 
 /* [V] Low-side filtered measurement of voltage 1 */
-// static float32_t V1_low_value;
+static float32_t V1_low_value;
 /* [V] Low-side filtered measurement of voltage 2 */
-// static float32_t V2_low_value;
+static float32_t V2_low_value;
 /* [A] Low-side filtered measurement of current 1 */
-// static float32_t I1_low_value;
+static float32_t I1_low_value;
 /* [A] Low-side filtered measurement of current 2 */
-// static float32_t I2_low_value;
+static float32_t I2_low_value;
 /* [A] High-side raw measurement of current */
 // static float32_t I_high;
 /* [V] High-side raw measurement of voltage */
@@ -175,9 +175,9 @@ static float32_t I1_rms_peak;
 /* [A] RMS value of current 2 estimated as peak/sqrt(2), refreshed once per grid period */
 static float32_t I2_rms_peak;
 /* [A] Running peak (max absolute value) of I1_low_value over the current grid period */
-static float32_t I1_peak_running;
+// static float32_t I1_peak_running;
 /* [A] Running peak (max absolute value) of I2_low_value over the current grid period */
-static float32_t I2_peak_running;
+// static float32_t I2_peak_running;
 /* Number of samples accumulated in the current peak-detection window */
 static uint32_t peak_sample_count;
 
@@ -191,7 +191,7 @@ static float32_t I1_meanSq_ema;
 static float32_t I2_meanSq_ema;
 
 /* [V] Peak-to-peak ripple of V_high over the last grid period */
-static float32_t Vhigh_ripple_pp;
+// static float32_t Vhigh_ripple_pp;
 /* [%] Peak-to-peak ripple of V_high relative to its mean over the last grid period */
 static float32_t Vhigh_ripple_pct;
 /* [V] Mean of V_high over the current grid period window */
@@ -650,6 +650,7 @@ void loop_application_task()
     case IDLEMODE:
         if (mode_asked == POWERMODE) {
             mode = POWERMODE;
+            critical_task_counter = 0;
         }
         // spin.led.turnOn();
         break;

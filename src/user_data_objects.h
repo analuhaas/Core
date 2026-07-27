@@ -40,20 +40,21 @@
  * parent, but groups and items can reuse numbers across different
  * parents. */
 #define ID_MEAS        0x5
-#define ID_MEAS_V1_LOW 0x50
-#define ID_MEAS_V2_LOW 0x51
-#define ID_MEAS_V_HIGH 0x52
-#define ID_MEAS_I1_LOW 0x53
-#define ID_MEAS_I2_LOW 0x54
-#define ID_MEAS_I_HIGH 0x55
-#define ID_MEAS_TEMP1  0x56
-#define ID_MEAS_TEMP2  0x57
+#define ID_MEAS_V_HIGH_RIPPLE 0x50
+#define ID_MEAS_V_HIGH 0x51
+#define ID_MEAS_I1_LOW 0x52
+#define ID_MEAS_I2_LOW 0x53
+#define ID_MEAS_I_HIGH 0x54
+#define ID_MEAS_TEMP1  0x55
+#define ID_MEAS_TEMP2  0x56
+#define ID_MEAS_MODE   0x57
 
 /* "Config" group ID (child of root) and its one writable item's ID. */
 #define ID_CONFIG              0x6
 #define ID_CONFIG_BLINK_PERIOD 0x60
 #define ID_CONFIG_MP 0x61
 #define ID_CONFIG_PHIM 0x62
+#define ID_CONFIG_MODE 0x63
 
 /* Subset bitmask: marks which items get included when a client asks for
  * a named subset of the tree (e.g. periodic reporting). Only one subset
@@ -63,10 +64,9 @@
 /* Backing storage for the "Measurements" group. ThingSet items only ever
  * store a pointer to these variables, so main.cpp updates them directly
  * (e.g. from sensor readings) and the new value is what GET returns. */
-static float32_t V1_low_value;
-static float32_t V2_low_value;
-static float32_t I1_low_value;
-static float32_t I2_low_value;
+static float32_t I1_peak_running;
+static float32_t I2_peak_running;
+static float32_t Vhigh_ripple_pp;
 static float32_t I_high_value;
 static float32_t V_high_value;
 static float32_t temp_1_value;
@@ -74,6 +74,9 @@ static float32_t temp_2_value;
 /* Scratch variable main.cpp reuses to fetch each sensor reading before
  * copying it into the corresponding *_value above. */
 static float32_t meas_data;
+/* Variable that main.cpp uses to set in which mode the converter is
+ * (IDLE, POWER, ERROR) */
+static uint8_t mode = IDLEMODE;
 
 /* Writable over the ThingSet shell: LED blink half-period, in seconds. */
 static float32_t blink_period_s = 1.0f;
@@ -81,6 +84,7 @@ static float32_t blink_period_s = 1.0f;
 /* Writable over the ThingSet shell: Modulation amplitude and phase, in pu and rad. */
 static float32_t Mp = 0.0F;
 static float32_t phi_m;
+static uint8_t mode_asked = IDLEMODE;
 
 /* Register the "Measurements" group as a child of the root (ID_ROOT),
  * with its own ID (ID_MEAS) and display name. THINGSET_NO_CALLBACK means
@@ -94,20 +98,18 @@ THINGSET_ADD_GROUP(ID_ROOT, ID_MEAS, "Measurements", THINGSET_NO_CALLBACK);
  * the suffix after "_" is the physical unit. THINGSET_ANY_R allows GET
  * from any authentication level (there's no write access here). */
 
-/* Low-side voltage on leg 1, in volts. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V1_LOW, "rV1Low_V", &V1_low_value, 2,
-                        THINGSET_ANY_R, SUBSET_SER);
+
 /* Low-side voltage on leg 2, in volts. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V2_LOW, "rV2Low_V", &V2_low_value, 2,
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V_HIGH_RIPPLE, "rVhighripple_V", &Vhigh_ripple_pp, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* High-side (bus) voltage, in volts. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V_HIGH, "rVHigh_V", &V_high_value, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* Low-side current on leg 1, in amps. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I1_LOW, "rI1Low_A", &I1_low_value, 2,
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I1_LOW, "rI1rms_A", &I1_peak_running, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* Low-side current on leg 2, in amps. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I2_LOW, "rI2Low_A", &I2_low_value, 2,
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I2_LOW, "rI2rms_A", &I2_peak_running, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* High-side (bus) current, in amps. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I_HIGH, "rIHigh_A", &I_high_value, 2,
@@ -117,6 +119,9 @@ THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_TEMP1, "rTemp1_degC", &temp_1_value, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* Temperature sensor 2, in degrees Celsius. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_TEMP2, "rTemp2_degC", &temp_2_value, 2,
+                        THINGSET_ANY_R, SUBSET_SER);
+
+THINGSET_ADD_ITEM_UINT8(ID_MEAS, ID_MEAS_MODE, "rmode", &mode,
                         THINGSET_ANY_R, SUBSET_SER);
 
 /* Register the "Config" group as a child of the root. */
@@ -135,3 +140,6 @@ THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_MP, "wMp",
 
 THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_PHIM, "wphi_m",
                         &phi_m, 2, THINGSET_ANY_RW, SUBSET_SER);
+
+THINGSET_ADD_ITEM_UINT8(ID_CONFIG, ID_CONFIG_MODE, "wmode",
+                        &mode_asked, THINGSET_ANY_RW, SUBSET_SER);
