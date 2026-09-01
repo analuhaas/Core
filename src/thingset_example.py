@@ -48,14 +48,12 @@ for name in ts.fetch_children(MEAS):
 
 print(measurements)
 
-print(ts.read(measurements["V1Low"]))
-print(ts.read(measurements["V2Low"]))
 print(ts.read(measurements["VHigh"]))
 
 # Flush all measurements and their current values at once.
 print(ts.read(MEAS))
 
-ts.write("Config", {"wBlinkPeriod_s": 0.5})
+ts.write("Config", {"wBlinkPeriod_s": 0.1})
 
 ts.write("Config", {"wMp": 0.6})
 

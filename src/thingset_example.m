@@ -45,7 +45,7 @@ MEAS = "Measurements";
 % and both USB interfaces then failing at the OS level until the board
 % is power-cycled. Update the port number if it enumerates differently on
 % your machine, but do not add the console port back to this list.
-KNOWN_PORTS = "";
+KNOWN_PORTS = "COM38";
 
 % Reuse an already-open connection across re-runs of this section instead
 % of reconnecting every time: closing and immediately reopening the same
@@ -72,7 +72,7 @@ end
 
 %% commands
 
-ts.write("Config", struct("wBlinkPeriod_s", 0.5));
+ts.write("Config", struct("wBlinkPeriod_s", 0.1));
 ts.write("Config", struct("wMp", 0.6));
 ts.write("Config", struct("wphi_m", 0.018));
 
@@ -81,7 +81,7 @@ ts.write("Config", struct("wphi_m", 0.018));
 disp(measurements.keys);
 disp(measurements.values);
 
-disp(ts.read(measurements("V1Low")));
+disp(ts.read(measurements("VHigh")));
 
 % Flush all measurements and their current values at once.
 disp(ts.read(MEAS));

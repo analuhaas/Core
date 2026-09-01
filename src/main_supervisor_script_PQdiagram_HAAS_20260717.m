@@ -156,21 +156,92 @@ for name = ts.fetchChildren(MEAS)
     end
 end
 
-%% Command converter to a certain PQ point
+%% Command converter to start operating
+ts.write("Config", struct("wBlinkPeriod_s", 0.1));
+ts.write("Config", struct("wmode", 0));
 
-ts.write("Config", struct("wBlinkPeriod_s", 0.5));
-ts.write("Config", struct("wMp", 0.6));
-ts.write("Config", struct("wphi_m", 0.018));
+%% Command AC source to sync
+ts.write("Config", struct("wMpAC", 0.4));
+ts.write("Config", struct("wphi_AC", 0.0));
 
+%% Command converter to sync
+ts.write("Config", struct("wMp", 0.43));
+ts.write("Config", struct("wphi_m", 0.0));
+
+%% PicoScope acquisition
+for s = 1:numScopes
+
+    [numSamples{s}, ~, channelData{s}, ~] = picoscope_acquisition(ps4000aDeviceObj{s}, numChannels{s});
+
+    % Convert each channel's raw ADC volts into its physical unit
+    % (Amps for current-clamp channels, unchanged for plain voltage
+    % channels where probeVoltsPerUnit is 1).
+    for ch = 1:numChannels{s}
+        channelData{s}{ch} = channelData{s}{ch} / probeVoltsPerUnit{s}(ch);
+    end
+
+end
+
+%% Process data
+% Plot each scope's channels in its own subplot.
+
+figure1 = figure('Name', 'PicoScope 4000 Series (A API) - Multi-scope Block Capture', ...
+    'NumberTitle', 'off');
+
+for s = 1:numScopes
+
+    subplot(numScopes, 1, s);
+    hold on;
+
+    timeNs = double(timeIntervalNanoSeconds{s}) * double(0:numSamples{s} - 1);
+    timeMs = timeNs / 1e6;
+
+    legendEntries = cell(1, numChannels{s});
+
+    for i = 1:numChannels{s}
+
+        plot(timeMs, channelData{s}{i});
+        legendEntries{i} = sprintf('Channel %s (%s)', channelLetters{s}(i), probeUnit{s}{i});
+
+    end
+
+    hold off;
+
+    title(sprintf('PicoScope %d (%s) - %.3f s/div', s, picoSerialNumbers{s}, secondsPerDivision));
+    xlabel('Time (ms)');
+
+    uniqueUnits = unique(probeUnit{s});
+    if (isscalar(uniqueUnits))
+        ylabel(sprintf('Amplitude (%s)', uniqueUnits{1}));
+    else
+        ylabel('Amplitude (see legend for units)');
+    end
+
+    grid on;
+    legend(legendEntries);
+
+end
+
+v_ac = channelData{1}{4};
+i_ac_2 = channelData{1}{1};
+v_ac_2 = channelData{1}{3};
+i_ac = channelData{1}{2};
+
+%% Command converter to PQ point
+ts.write("Config", struct("wMp", 0.53));
+ts.write("Config", struct("wphi_m", 0.0));
 %% Converter acquisition
 
-V_high_value = ts.read(measurements("V_high_value"));
-I_high_value = ts.read(measurements("I_high_value"));
-I1_peak_running = ts.read(measurements("I1_peak_running"));
-I2_peak_running = ts.read(measurements("I2_peak_running"));
-Vhigh_ripple_pp = ts.read(measurements("Vhigh_ripple_pp"));
-temp_1_value = ts.read(measurements("temp_1_value"));
-temp_2_value = ts.read(measurements("temp_2_value"));
+V_high_value = ts.read(measurements("VHigh"));
+I_high_value = ts.read(measurements("IHigh"));
+I1_peak_running = ts.read(measurements("I1rms"));
+I2_peak_running = ts.read(measurements("I2rms"));
+Vhigh_ripple_pp = ts.read(measurements("Vhighripple"));
+temp_1_value = ts.read(measurements("Temp1"));
+temp_2_value = ts.read(measurements("Temp2"));
+temp_1_value = ts.read(measurements("PowerP"));
+temp_2_value = ts.read(measurements("PowerQ"));
+mode = ts.read(measurements("Mode"));
 
 % Flush all measurements and their current values at once.
 disp(ts.read(MEAS));
@@ -246,3 +317,6 @@ for s = 1:numScopes
     delete(ps4000aDeviceObj{s});
 
 end
+
+%% close connection thingset
+ts.close();

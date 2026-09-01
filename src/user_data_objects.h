@@ -39,22 +39,26 @@
  * ID_MEAS). Each ID must be unique among the siblings under the same
  * parent, but groups and items can reuse numbers across different
  * parents. */
-#define ID_MEAS        0x5
+#define ID_MEAS               0x5
 #define ID_MEAS_V_HIGH_RIPPLE 0x50
-#define ID_MEAS_V_HIGH 0x51
-#define ID_MEAS_I1_LOW 0x52
-#define ID_MEAS_I2_LOW 0x53
-#define ID_MEAS_I_HIGH 0x54
-#define ID_MEAS_TEMP1  0x55
-#define ID_MEAS_TEMP2  0x56
-#define ID_MEAS_MODE   0x57
+#define ID_MEAS_V_HIGH        0x51
+#define ID_MEAS_I1_LOW        0x52
+#define ID_MEAS_I2_LOW        0x53
+#define ID_MEAS_I_HIGH        0x54
+#define ID_MEAS_TEMP1         0x55
+#define ID_MEAS_TEMP2         0x56
+#define ID_MEAS_MODE          0x57
+#define ID_MEAS_POWERD        0x58
+#define ID_MEAS_POWERQ        0x59
 
 /* "Config" group ID (child of root) and its one writable item's ID. */
 #define ID_CONFIG              0x6
 #define ID_CONFIG_BLINK_PERIOD 0x60
-#define ID_CONFIG_MP 0x61
-#define ID_CONFIG_PHIM 0x62
-#define ID_CONFIG_MODE 0x63
+#define ID_CONFIG_MP           0x61
+#define ID_CONFIG_PHIM         0x62
+#define ID_CONFIG_MPAC         0x63
+#define ID_CONFIG_PHIAC        0x64
+#define ID_CONFIG_MODE         0x65
 
 /* Subset bitmask: marks which items get included when a client asks for
  * a named subset of the tree (e.g. periodic reporting). Only one subset
@@ -64,13 +68,15 @@
 /* Backing storage for the "Measurements" group. ThingSet items only ever
  * store a pointer to these variables, so main.cpp updates them directly
  * (e.g. from sensor readings) and the new value is what GET returns. */
-static float32_t I1_peak_running;
-static float32_t I2_peak_running;
+static float32_t I1_rms_peak;
+static float32_t I2_rms_peak;
 static float32_t Vhigh_ripple_pp;
 static float32_t I_high_value;
 static float32_t V_high_value;
 static float32_t temp_1_value;
 static float32_t temp_2_value;
+static float32_t power_d;
+static float32_t power_q;
 /* Scratch variable main.cpp reuses to fetch each sensor reading before
  * copying it into the corresponding *_value above. */
 static float32_t meas_data;
@@ -90,7 +96,9 @@ static float32_t blink_period_s = 1.0f;
 
 /* Writable over the ThingSet shell: Modulation amplitude and phase, in pu and rad. */
 static float32_t Mp = 0.0F;
-static float32_t phi_m;
+static float32_t phi_m = 0.0F;
+static float32_t Mp_AC_source = 0.0F;
+static float32_t phi_AC_source = 0.0F;
 static uint8_t mode_asked = IDLEMODE;
 
 /* Register the "Measurements" group as a child of the root (ID_ROOT),
@@ -106,17 +114,17 @@ THINGSET_ADD_GROUP(ID_ROOT, ID_MEAS, "Measurements", THINGSET_NO_CALLBACK);
  * from any authentication level (there's no write access here). */
 
 
-/* Low-side voltage on leg 2, in volts. */
+/* High-side (bus) voltage ripple, in volts. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V_HIGH_RIPPLE, "rVhighripple_V", &Vhigh_ripple_pp, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* High-side (bus) voltage, in volts. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V_HIGH, "rVHigh_V", &V_high_value, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* Low-side current on leg 1, in amps. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I1_LOW, "rI1rms_A", &I1_peak_running, 2,
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I1_LOW, "rI1rms_A", &I1_rms_peak, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* Low-side current on leg 2, in amps. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I2_LOW, "rI2rms_A", &I2_peak_running, 2,
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I2_LOW, "rI2rms_A", &I2_rms_peak, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* High-side (bus) current, in amps. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I_HIGH, "rIHigh_A", &I_high_value, 2,
@@ -128,7 +136,13 @@ THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_TEMP1, "rTemp1_degC", &temp_1_value, 2,
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_TEMP2, "rTemp2_degC", &temp_2_value, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 
-THINGSET_ADD_ITEM_UINT8(ID_MEAS, ID_MEAS_MODE, "rmode", &mode,
+THINGSET_ADD_ITEM_UINT8(ID_MEAS, ID_MEAS_MODE, "rMode_pu", &mode,
+                        THINGSET_ANY_R, SUBSET_SER);
+/* Active power, in W. */
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_POWERD, "rPowerP_W", &power_d, 2,
+                        THINGSET_ANY_R, SUBSET_SER);
+/* Reactive power, in VAR. */
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_POWERQ, "rPowerQ_VAR", &power_q, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 
 /* Register the "Config" group as a child of the root. */
@@ -147,6 +161,12 @@ THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_MP, "wMp",
 
 THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_PHIM, "wphi_m",
                         &phi_m, 2, THINGSET_ANY_RW, SUBSET_SER);
+
+THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_MPAC, "wMpAC",
+                        &Mp_AC_source, 2, THINGSET_ANY_RW, SUBSET_SER);
+
+THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_PHIAC, "wphi_AC",
+                        &phi_AC_source, 2, THINGSET_ANY_RW, SUBSET_SER);
 
 THINGSET_ADD_ITEM_UINT8(ID_CONFIG, ID_CONFIG_MODE, "wmode",
                         &mode_asked, THINGSET_ANY_RW, SUBSET_SER);

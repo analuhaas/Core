@@ -174,13 +174,13 @@ static float32_t I2_sum_sq;
 static uint32_t rms_sample_count;
 
 /* [A] RMS value of current 1 estimated as peak/sqrt(2), refreshed once per grid period */
-static float32_t I1_rms_peak;
+// static float32_t I1_rms_peak;
 /* [A] RMS value of current 2 estimated as peak/sqrt(2), refreshed once per grid period */
-static float32_t I2_rms_peak;
+// static float32_t I2_rms_peak;
 /* [A] Running peak (max absolute value) of I1_low_value over the current grid period */
-// static float32_t I1_peak_running;
+static float32_t I1_peak_running;
 /* [A] Running peak (max absolute value) of I2_low_value over the current grid period */
-// static float32_t I2_peak_running;
+static float32_t I2_peak_running;
 /* Number of samples accumulated in the current peak-detection window */
 static uint32_t peak_sample_count;
 
@@ -209,13 +209,19 @@ static float32_t Vhigh_sum;
 static uint32_t vripple_sample_count;
 
 /* [V] Amplitude of the local teaching sine wave */
-static float32_t Mp_AC_source = 0.0F;
+// static float32_t Mp_AC_source = 0.0F;
 /* [V] Amplitude of the local teaching sine wave */
 // static float32_t Mp = 0.0F;
 /* [rad] Phase angle of the local teaching sine wave */
-static float32_t phi_AC_source;
+// static float32_t phi_AC_source;
+static float32_t phi_AC_source_old;
+static float32_t delta_phi_AC_source;
+static float32_t phi_AC_source_modulo;
 /* [rad] Phase angle of the reference duty cycle sine wave */
 // static float32_t phi_m;
+static float32_t phi_m_old;
+static float32_t delta_phi_m;
+static float32_t phi_m_modulo;
 /* [No unit] Instantaneous value of the local teaching sine wave */
 static float32_t sine;
 /* [No unit] Instantaneous value of the reference duty cycle sine wave */
@@ -255,6 +261,8 @@ static dqo_t Vdq;
 static dqo_t Idq;
 /* [W, VAR] Active (d) and reactive (q) AC-side power computed from Vdq/Idq */
 static dqo_t power;
+// static float32_t power_d;
+// static float32_t power_q;
 
 /* Synchronization variables */
 static uint32_t dac_value;
@@ -322,12 +330,17 @@ void stop_pwm_outputs()
  */
 void update_teaching_sine()
 {
-    phi_AC_source = ot_modulo_2pi(phi_AC_source + W0 * TS);
-    phi_m = ot_modulo_2pi(phi_m + W0 * TS);
-    sine = ot_sin(phi_AC_source);
-    sine_modulation = ot_sin(phi_m);
+    delta_phi_AC_source = phi_AC_source - phi_AC_source_old;
+    delta_phi_m = phi_m - phi_m_old;
+    phi_AC_source_modulo = ot_modulo_2pi(phi_AC_source_modulo + delta_phi_AC_source + W0 * TS);
+    phi_m_modulo = ot_modulo_2pi(phi_m_modulo + delta_phi_m + W0 * TS);
+    sine = ot_sin(phi_AC_source_modulo);
+    sine_modulation = ot_sin(phi_m_modulo);
     delta_duty_cycle = 0.5F + ( Mp * sine_modulation / 2.0F );
-    dac_value = (0.52F + ( Mp_AC_source * sine / 2.0F )) * 4000;
+    dac_value = (0.5F + ( Mp_AC_source * sine / 2.0F )) * 4000;
+
+    phi_AC_source_old = phi_AC_source;
+    phi_m_old = phi_m;
 }
 
 /**
@@ -457,11 +470,14 @@ void calculate_power()
     Vab = sogi_v.calc(Vgrid_meas,W0);
     Iab = sogi_i.calc(I1_low_value,W0);
 
-    Vdq = Transform::rotation_to_dqo(Vab, phi_m);
-    Idq = Transform::rotation_to_dqo(Iab, phi_m);
+    Vdq = Transform::rotation_to_dqo(Vab, phi_m_modulo);
+    Idq = Transform::rotation_to_dqo(Iab, phi_m_modulo);
 
     power.d = 0.5F * (Vdq.d * Idq.d + Vdq.q * Idq.q);
     power.q = 0.5F * (Idq.d * Vdq.q - Idq.q * Vdq.d);
+
+    power_d = power.d;
+    power_q = power.q;
 }
 
 /**
@@ -746,13 +762,15 @@ void loop_application_task()
 void loop_critical_task()
 {
     critical_task_counter++;
+    update_teaching_sine();
+
     read_measurements();
     // update_rms();
-    // update_rms_peak();
+    update_rms_peak();
     // update_rms_ema();
     update_voltage_ripple();
-    update_teaching_sine();
     calculate_power();
+    
 
     // dac_value = delta_duty_cycle * 4000;
     spin.dac.setConstValue(2, 1, dac_value);
