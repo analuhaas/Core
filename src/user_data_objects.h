@@ -48,6 +48,8 @@
 #define ID_MEAS_TEMP1  0x55
 #define ID_MEAS_TEMP2  0x56
 #define ID_MEAS_MODE   0x57
+#define ID_MEAS_POWERP 0x58
+#define ID_MEAS_POWERQ 0x59
 
 /* "Config" group ID (child of root) and its one writable item's ID. */
 #define ID_CONFIG              0x6
@@ -55,6 +57,8 @@
 #define ID_CONFIG_MP 0x61
 #define ID_CONFIG_PHIM 0x62
 #define ID_CONFIG_MODE 0x63
+#define ID_CONFIG_MPAC 0x64
+#define ID_CONFIG_PHIAC 0x65
 
 /* Subset bitmask: marks which items get included when a client asks for
  * a named subset of the tree (e.g. periodic reporting). Only one subset
@@ -64,16 +68,26 @@
 /* Backing storage for the "Measurements" group. ThingSet items only ever
  * store a pointer to these variables, so main.cpp updates them directly
  * (e.g. from sensor readings) and the new value is what GET returns. */
-static float32_t I1_peak_running;
-static float32_t I2_peak_running;
+static float32_t I1_rms_peak;
+static float32_t I2_rms_peak;
 static float32_t Vhigh_ripple_pp;
 static float32_t I_high_value;
 static float32_t V_high_value;
 static float32_t temp_1_value;
 static float32_t temp_2_value;
+static float32_t power_d;
+static float32_t power_q;
+
 /* Scratch variable main.cpp reuses to fetch each sensor reading before
  * copying it into the corresponding *_value above. */
 static float32_t meas_data;
+
+enum ConverterState : uint8_t /* Holds the current state of the inverter */
+{
+    IDLEMODE = 0,  /* Idle mode: stops the converter power */
+    POWERMODE = 1, /* Power mode: drives the H-bridge with sine PWM */
+    ERRORMODE = 3  /* Error mode: indicates an error condition */
+};
 /* Variable that main.cpp uses to set in which mode the converter is
  * (IDLE, POWER, ERROR) */
 static uint8_t mode = IDLEMODE;
@@ -83,7 +97,9 @@ static float32_t blink_period_s = 1.0f;
 
 /* Writable over the ThingSet shell: Modulation amplitude and phase, in pu and rad. */
 static float32_t Mp = 0.0F;
-static float32_t phi_m;
+static float32_t phi_m = 0.0F;
+static float32_t Mp_AC_source = 0.0F;
+static float32_t phi_AC_source = 0.0F;
 static uint8_t mode_asked = IDLEMODE;
 
 /* Register the "Measurements" group as a child of the root (ID_ROOT),
@@ -106,10 +122,10 @@ THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V_HIGH_RIPPLE, "rVhighripple_V", &Vhigh
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V_HIGH, "rVHigh_V", &V_high_value, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* Low-side current on leg 1, in amps. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I1_LOW, "rI1rms_A", &I1_peak_running, 2,
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I1_LOW, "rI1rms_A", &I1_rms_peak, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* Low-side current on leg 2, in amps. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I2_LOW, "rI2rms_A", &I2_peak_running, 2,
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I2_LOW, "rI2rms_A", &I2_rms_peak, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* High-side (bus) current, in amps. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I_HIGH, "rIHigh_A", &I_high_value, 2,
@@ -121,7 +137,13 @@ THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_TEMP1, "rTemp1_degC", &temp_1_value, 2,
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_TEMP2, "rTemp2_degC", &temp_2_value, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 
-THINGSET_ADD_ITEM_UINT8(ID_MEAS, ID_MEAS_MODE, "rmode", &mode,
+THINGSET_ADD_ITEM_UINT8(ID_MEAS, ID_MEAS_MODE, "rMode", &mode,
+                        THINGSET_ANY_R, SUBSET_SER);
+/* Active power, in W. */
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_POWERP, "rPowerP_W", &power_d, 2,
+                        THINGSET_ANY_R, SUBSET_SER);
+/* Reactive power, in VAr. */
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_POWERQ, "rPowerQ_VAr", &power_q, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 
 /* Register the "Config" group as a child of the root. */
@@ -143,3 +165,9 @@ THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_PHIM, "wphi_m",
 
 THINGSET_ADD_ITEM_UINT8(ID_CONFIG, ID_CONFIG_MODE, "wmode",
                         &mode_asked, THINGSET_ANY_RW, SUBSET_SER);
+
+THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_MPAC, "wMpAC",
+                        &Mp_AC_source, 2, THINGSET_ANY_RW, SUBSET_SER);
+
+THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_PHIAC, "wphi_AC",
+                        &phi_AC_source, 2, THINGSET_ANY_RW, SUBSET_SER);

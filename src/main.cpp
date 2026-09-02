@@ -38,8 +38,12 @@
 /* From control library */
 #include "trigo.h"
 #include "filters.h"
+#include "transform.h"
 #include "ScopeMimicry.h"
 #include "zephyr/console/console.h"
+
+/* From single_phase_inverter library. */
+#include "sogi.h"
 
 #define DUTY_MIN 0.1F
 #define DUTY_MAX 0.9F
@@ -81,6 +85,8 @@ void setup_scope();
 void read_measurements();
 /* Checks both measured currents against the protection threshold */
 bool overcurrent_detected();
+/* Calculate the active and reactive power on the AC side */
+void calculate_power();
 /* Accumulates squared currents and refreshes the RMS values once per grid period */
 void update_rms();
 /* Tracks the peak current over a grid period and derives RMS as peak/sqrt(2) */
@@ -91,13 +97,6 @@ void update_rms_ema();
 void update_voltage_ripple();
 
 /*--------------USER VARIABLES DECLARATIONS------------------- */
-
-enum ConverterState : uint8_t /* Holds the current state of the inverter */
-{
-    IDLEMODE = 0,  /* Idle mode: stops the converter power */
-    POWERMODE = 1, /* Power mode: drives the H-bridge with sine PWM */
-    ERRORMODE = 3  /* Error mode: indicates an error condition */
-};
 
 /* Control task period in microseconds */
 static constexpr uint32_t CONTROL_TASK_PERIOD_US = 100;
@@ -171,13 +170,13 @@ static float32_t I2_sum_sq;
 static uint32_t rms_sample_count;
 
 /* [A] RMS value of current 1 estimated as peak/sqrt(2), refreshed once per grid period */
-static float32_t I1_rms_peak;
+// static float32_t I1_rms_peak;
 /* [A] RMS value of current 2 estimated as peak/sqrt(2), refreshed once per grid period */
-static float32_t I2_rms_peak;
+// static float32_t I2_rms_peak;
 /* [A] Running peak (max absolute value) of I1_low_value over the current grid period */
-// static float32_t I1_peak_running;
+static float32_t I1_peak_running;
 /* [A] Running peak (max absolute value) of I2_low_value over the current grid period */
-// static float32_t I2_peak_running;
+static float32_t I2_peak_running;
 /* Number of samples accumulated in the current peak-detection window */
 static uint32_t peak_sample_count;
 
@@ -206,13 +205,19 @@ static float32_t Vhigh_sum;
 static uint32_t vripple_sample_count;
 
 /* [V] Amplitude of the local teaching sine wave */
-static float32_t Mp_AC_source = 0.0F;
+// static float32_t Mp_AC_source = 0.0F;
 /* [V] Amplitude of the local teaching sine wave */
 // static float32_t Mp = 0.0F;
 /* [rad] Phase angle of the local teaching sine wave */
-static float32_t phi_AC_source;
+// static float32_t phi_AC_source;
+static float32_t phi_AC_source_modulo;
+static float32_t phi_AC_source_old;
+static float32_t delta_phi_AC_source;
 /* [rad] Phase angle of the reference duty cycle sine wave */
 // static float32_t phi_m;
+static float32_t phi_m_modulo;
+static float32_t phi_m_old;
+static float32_t delta_phi_m;
 /* [No unit] Instantaneous value of the local teaching sine wave */
 static float32_t sine;
 /* [No unit] Instantaneous value of the reference duty cycle sine wave */
@@ -240,6 +245,25 @@ static ScopeMimicry scope(SCOPE_BUFFER_SIZE, SCOPE_CHANNEL_COUNT);
 
 /* Synchronization variables */
 static uint32_t dac_value;
+
+/* SOGI resonance gain, shared by the voltage and current SOGI filters */
+static constexpr float32_t Kr = 500.0F;
+/* SOGI filter extracting the orthogonal (alpha/beta) components of Vgrid_meas */
+static Sogi sogi_v;
+/* SOGI filter extracting the orthogonal (alpha/beta) components of I1_low_value */
+static Sogi sogi_i;
+/* [V] Clarke (alpha/beta) components of the grid voltage, from sogi_v */
+static clarke_t Vab;
+/* [A] Clarke (alpha/beta) components of the grid current, from sogi_i */
+static clarke_t Iab;
+/* [V] dq components of the grid voltage, rotated from Vab by phi_m */
+static dqo_t Vdq;
+/* [A] dq components of the grid current, rotated from Iab by phi_m */
+static dqo_t Idq;
+/* [W, VAR] Active (d) and reactive (q) AC-side power computed from Vdq/Idq */
+static dqo_t power;
+// static float32_t power_d;
+// static float32_t power_q;
 /*--------------------------------------------------------------- */
 
 /**********************  SUPPORT FUNCTIONS  ***************************/
@@ -304,12 +328,17 @@ void stop_pwm_outputs()
  */
 void update_teaching_sine()
 {
-    phi_AC_source = ot_modulo_2pi(phi_AC_source + W0 * TS);
-    phi_m = ot_modulo_2pi(phi_m + W0 * TS);
-    sine = ot_sin(phi_AC_source);
-    sine_modulation = ot_sin(phi_m);
+    delta_phi_AC_source = phi_AC_source - phi_AC_source_old;
+    phi_AC_source_modulo = ot_modulo_2pi(phi_AC_source_modulo + delta_phi_AC_source + W0 * TS);
+
+    delta_phi_m = phi_m - phi_m_old;
+    phi_m_modulo = ot_modulo_2pi(phi_m_modulo + delta_phi_m + W0 * TS);
+    sine = ot_sin(phi_AC_source_modulo);
+    sine_modulation = ot_sin(phi_m_modulo);
     delta_duty_cycle = 0.5F + ( Mp * sine_modulation / 2.0F );
     dac_value = (0.52F + ( Mp_AC_source * sine / 2.0F )) * 4000;
+    phi_AC_source_old = phi_AC_source;
+    phi_m_old = phi_m;
 }
 
 /**
@@ -432,6 +461,24 @@ void read_measurements()
 
     I1_low_value = I1_low_value -0.1;
     I2_low_value = I2_low_value -0.15;
+}
+
+/**
+ * @brief Calculates active and reactive power using sogi and dq0 transform (single phase application).
+ */
+void calculate_power()
+{
+    Vab = sogi_v.calc(Vgrid_meas,W0);
+    Iab = sogi_i.calc(I1_low_value,W0);
+
+    Vdq = Transform::rotation_to_dqo(Vab, phi_m);
+    Idq = Transform::rotation_to_dqo(Iab, phi_m);
+
+    power.d = 0.5F * (Vdq.d * Idq.d + Vdq.q * Idq.q);
+    power.q = 0.5F * (Idq.d * Vdq.q - Idq.q * Vdq.d);
+
+    power_d = power.d;
+    power_q = power.q;
 }
 
 /**
@@ -561,6 +608,9 @@ void setup_routine()
     task.startBackground(app_task_number);
     // task.startBackground(com_task_number);
     task.startCritical();
+
+    sogi_v.init(Kr, TS);
+    sogi_i.init(Kr, TS);
 }
 
 /**
@@ -713,12 +763,14 @@ void loop_application_task()
 void loop_critical_task()
 {
     critical_task_counter++;
+    update_teaching_sine();
     read_measurements();
     // update_rms();
-    // update_rms_peak();
+    update_rms_peak();
     // update_rms_ema();
     update_voltage_ripple();
-    update_teaching_sine();
+    calculate_power();
+    
 
     // dac_value = delta_duty_cycle * 4000;
     spin.dac.setConstValue(2, 1, dac_value);
