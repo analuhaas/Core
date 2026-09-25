@@ -26,24 +26,23 @@
  * @author Ayoub Farah Hassan <ayoub.farah-hassan@laas.fr>
  */
 
-/*--------------Zephyr---------------------------------------- */
-#include <zephyr/console/console.h>
-
 /*--------------OWNTECH APIs---------------------------------- */
 #include "SpinAPI.h"
 #include "ShieldAPI.h"
 #include "TaskAPI.h"
 
 /*--------------OWNTECH Libraries----------------------------- */
-#include "pid.h"
+
+
+/*--------------ThingSet objects------------------------------ */
+/* Raw measurements, mode and duty cycle exposed on the ThingSet shell */
+#include "user_data_objects.h"
 
 /*--------------SETUP FUNCTIONS DECLARATION------------------- */
 /* Setups the hardware and software of the system */
 void setup_routine();
 
 /*--------------LOOP FUNCTIONS DECLARATION-------------------- */
-/* Code to be executed in the slow communication task */
-void loop_communication_task();
 /* Code to be executed in the background task */
 void loop_application_task();
 /* Code to be executed in real time in the critical task */
@@ -56,16 +55,8 @@ static uint32_t control_task_period = 100;
 /* [bool] state of the PWM (ctrl task) */
 static bool pwm_enable = false;
 
-uint8_t received_serial_char;
-
-/* Measure variables */
-
-static float32_t V1_low_value;
-static float32_t V2_low_value;
-static float32_t I1_low_value;
-static float32_t I2_low_value;
-static float32_t I_high;
-static float32_t V_high;
+/* Measure variables (the six raw sensor values are declared in
+ * user_data_objects.h) */
 
 static float32_t temp_1_value;
 static float32_t temp_2_value;
@@ -73,32 +64,9 @@ static float32_t temp_2_value;
 /* Temporary storage fore measured value (ctrl task) */
 static float meas_data;
 
-float32_t duty_cycle = 0.3;
-
-/* Voltage reference */
-static float32_t voltage_reference = 15;
-
-/* PID coefficients for a 8.6ms step response*/
-static float32_t kp = 0.000215;
-static float32_t Ti = 7.5175e-5;
-static float32_t Td = 0.0;
-static float32_t N = 0.0;
-static float32_t upper_bound = 1.0F;
-static float32_t lower_bound = 0.0F;
-static float32_t Ts = control_task_period * 1e-6;
-static PidParams pid_params(Ts, kp, Ti, Td, N, lower_bound, upper_bound);
-static Pid pid;
+static float32_t duty_cycle = 0.3F;
 
 /*--------------------------------------------------------------- */
-
-/* LIST OF POSSIBLE MODES FOR THE OWNTECH CONVERTER */
-enum serial_interface_menu_mode
-{
-    IDLEMODE = 0,
-    POWERMODE
-};
-
-uint8_t mode = IDLEMODE;
 
 /*--------------SETUP FUNCTIONS------------------------------- */
 
@@ -133,70 +101,28 @@ void setup_routine()
 
     /* Then declare tasks */
     uint32_t app_task_number = task.createBackground(loop_application_task);
-    uint32_t com_task_number = task.createBackground(loop_communication_task);
     task.createCritical(loop_critical_task, 100);
 
     /* Finally, start tasks */
     task.startBackground(app_task_number);
-    task.startBackground(com_task_number);
     task.startCritical();
 }
 
 /*--------------LOOP FUNCTIONS-------------------------------- */
 
 /**
- * This tasks implements a minimalistic USB serial interface to control
- * the buck converter.
- */
-void loop_communication_task()
-{
-    received_serial_char = console_getchar();
-    switch (received_serial_char)
-    {
-    case 'h':
-        /*----------SERIAL INTERFACE MENU----------------------- */
-        printk(" ________________________________________ \n"
-               "|     ---- MENU buck voltage mode ----   |\n"
-               "|     press i : idle mode                |\n"
-               "|     press p : power mode               |\n"
-               "|     press u : voltage reference UP     |\n"
-               "|     press d : voltage reference DOWN   |\n"
-               "|________________________________________|\n\n");
-        /*------------------------------------------------------ */
-        break;
-    case 'i':
-        printk("idle mode\n");
-        mode = IDLEMODE;
-        break;
-    case 'p':
-        printk("power mode\n");
-        mode = POWERMODE;
-        break;
-    case 'u':
-        duty_cycle += 0.05;
-        break;
-    case 'd':
-        duty_cycle -= 0.05;
-        break;
-    default:
-        break;
-    }
-}
-
-/**
  * This is the code loop of the background task
- * This task mostly logs back measurements to the USB serial interface.
+ * It blinks the LED and reads the temperature sensors. Measurements are
+ * read over the ThingSet shell.
  */
 void loop_application_task()
 {
-    if (mode == IDLEMODE)
-    {
-        spin.led.turnOff();
-    }
-    else if (mode == POWERMODE)
-    {
-        spin.led.turnOn();
+    /* Heartbeat: a blink rate change after writing Config/wBlinkPeriod_s
+     * shows that the ThingSet link works */
+    spin.led.toggle();
 
+    if (mode != IDLEMODE)
+    {
         shield.sensors.triggerTwistTempMeas(TEMP_SENSOR_1);
         shield.sensors.triggerTwistTempMeas(TEMP_SENSOR_2);
 
@@ -205,17 +131,11 @@ void loop_application_task()
 
         meas_data = shield.sensors.getLatestValue(TEMP_SENSOR_2);
         if (meas_data != NO_VALUE) temp_2_value = meas_data;
-
-
-        printk("%.3f:", (double)duty_cycle);
-        printk("%.3f:", (double)V_high);
-        printk("%.3f:", (double)V1_low_value);
-        printk("%.3f:", (double)V2_low_value);
-        printk("%.3f:", (double)I_high);
-        printk("%.3f:", (double)I1_low_value);
-        printk("%.3f\n", (double)I2_low_value);
     }
-    task.suspendBackgroundMs(100);
+
+    /* blink_period_s is writable over the ThingSet shell (Config/wBlinkPeriod_s) */
+    if (blink_period_s < 0.05F) blink_period_s = 0.05F;
+    task.suspendBackgroundMs((uint32_t)(blink_period_s * 1000.0F));
 }
 
 /**
@@ -245,22 +165,34 @@ void loop_critical_task()
     meas_data = shield.sensors.getLatestValue(V_HIGH);
     if (meas_data != NO_VALUE) V_high = meas_data;
 
+    /* Mode requested over ThingSet (Config/wmode), unknown values -> idle */
+    uint8_t new_mode = (mode_asked == POWERMODE1 || mode_asked == POWERMODE2)
+                       ? mode_asked : IDLEMODE;
 
-    if (mode == IDLEMODE)
+    /* Stop the PWM when the mode changes (to idle or to the other leg) */
+    if (new_mode != mode && pwm_enable)
     {
-        if (pwm_enable == true)
-        {
-            shield.power.stop(ALL);
-        }
+        shield.power.stop(ALL);
         pwm_enable = false;
     }
-    else if (mode == POWERMODE)
+    mode = new_mode;
+
+    if (mode == POWERMODE1)
     {
-        shield.power.setDutyCycle(LEG1,1.0);
+        shield.power.setDutyCycle(LEG1, 1.0);
         if (!pwm_enable)
         {
             pwm_enable = true;
             shield.power.start(LEG1);
+        }
+    }
+    else if (mode == POWERMODE2)
+    {
+        shield.power.setDutyCycle(LEG2, 1.0);
+        if (!pwm_enable)
+        {
+            pwm_enable = true;
+            shield.power.start(LEG2);
         }
     }
 
