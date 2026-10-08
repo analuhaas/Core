@@ -108,8 +108,6 @@ enum serial_interface_menu_mode
     IDLEMODE = 0, // Before starting the low-frequency sequence
     FIRSTSEQUENCEMODE = 1, // Executes first part of sequence (VDC is ON)
     SECONDSEQUENCEMODE = 2, // Executes second part of sequence (VDC is OFF)
-    THIRDSEQUENCEMODE = 3, // Executes third part of sequence (VDC is ON)
-    FOURTHSEQUENCEMODE = 4, // Executes fourth part of sequence (VDC is OFF)
 };
 
 uint8_t mode = IDLEMODE;
@@ -200,8 +198,6 @@ void setup_routine()
  * IDLE (i) = before starting the sequence.
  * FIRST SEQUENCE (f) = start MMC module test with sequence.
  * SECOND SEQUENCE (s) = start second part of sequence (automatically changed when VDC OFF).
- * THIRD SEQUENCE (t) = start third part of sequence (automatically changed when VDC OFF).
- * FOURTH SEQUENCE (o) = start fourth part of sequence (automatically changed when VDC OFF).
  *
  * It also sends scope data retrieve commands (r).
  */
@@ -217,8 +213,6 @@ void loop_communication_task()
                "|     press i : idle mode                |\n"
                "|     press f : sequence first part mode |\n"
                "|     press s : sequence second part mode|\n"
-               "|     press t : sequence third part mode |\n"
-               "|     press o : sequence fourth part mode|\n"
                "|     press r : download datas           |\n"
                "|________________________________________|\n\n");
         /*------------------------------------------------------ */
@@ -237,17 +231,6 @@ void loop_communication_task()
         printk("second sequence part\n");
         mode = SECONDSEQUENCEMODE;
         seq_timer = 0.45F;
-        break;
-    case 't':
-        printk("third sequence part\n");
-        mode = THIRDSEQUENCEMODE;
-        seq_timer = 0.75F;
-        break;
-    case 'o':
-        printk("fourth sequence part\n");
-        mode = FOURTHSEQUENCEMODE;
-        seq_timer = 1.0F;
-        counter_ONOFF = 0;
         break;
     case 'r':
         is_downloading = true;
@@ -276,11 +259,11 @@ void loop_application_task()
         }
         is_downloading = false;
     }
-    else if (mode == SECONDSEQUENCEMODE || mode == FOURTHSEQUENCEMODE) // VDC is OFF
+    else if (mode == SECONDSEQUENCEMODE) // VDC is OFF
     {
         spin.led.turnOn();
     }
-    else if (mode == FIRSTSEQUENCEMODE || mode == THIRDSEQUENCEMODE) // VDC is ON
+    else if (mode == FIRSTSEQUENCEMODE) // VDC is ON
     {
         spin.led.toggle();
     }
@@ -404,79 +387,23 @@ void loop_critical_task()
     {
 
         /* seq_timer starts at 0.45 s (set when leaving the first part) */
-        if(seq_timer >= 0.45F && seq_timer < 0.5F) // Disconnected state from 0.45 to 0.5 s
+        if(seq_timer >= 0.45F && seq_timer < 0.7F) // Disconnected state from 0.45 to 0.5 s
         {
             g=0;
         }
-        if(seq_timer >= 0.5F && seq_timer < 0.6F) // Blocked state from 0.5 to 0.6 s
+        if(seq_timer >= 0.7F && seq_timer < 0.8F) // Blocked state from 0.5 to 0.6 s
         {
             g=2;
         }
-        if(seq_timer >= 0.6F && seq_timer < 0.75F) // Connected state from 0.6 to 0.75 s
+        if(seq_timer >= 0.8F && seq_timer < 0.9F) // Connected state from 0.6 to 0.75 s
         {
             g=1;
         }
-        if(seq_timer >= 0.75F) // Disconnected state from 0.75 s waiting for VDC to be turned ON to start third part of the test sequence
-        {
-            g=0;
-            if (I1_low_value >= I_on) // If VDC is TURNED ON, current flows through Q2: pass to third part of the sequence
-            {
-                mode = THIRDSEQUENCEMODE;
-                seq_timer = 0.75F;
-            }
-        }
-
-        seq_timer += Ts;
-    }
-    else if (mode == THIRDSEQUENCEMODE) // Executes sequence third part
-    {
-
-        if(seq_timer >= 0.75F && seq_timer < 0.85F) // Blocked state from 0.75 to 0.85 s
-        {
-            g=2;
-
-        }
-        if(seq_timer >= 0.85F) // Disconnected state from 0.85 s until VDC is turned OFF, then goes to fourth part of the sequence
-        {
-            g=0;
-            if (I1_low_value < I_on && seq_timer >= 1.0F) // If VDC is TURNED OFF, pass to fourth part of the sequence
-            {
-                mode = FOURTHSEQUENCEMODE;
-                seq_timer = 1.0F;
-                counter_ONOFF = 0;
-            }
-        }
-
-        seq_timer += Ts;
-    }
-    else if (mode == FOURTHSEQUENCEMODE) // Executes sequence fourth part
-    {
-
-        if(seq_timer >= 1.0F && seq_timer < 1.2F) // Switches between connected and disconnected state from 1.0 to 1.2 s
-        {
-            /* Pulse generation at HF frequency */
-            if (counter_ONOFF <= HF_period/2 - Ts) // Disconnected at first half of period
-            {
-                g = 0;
-            }
-            if (counter_ONOFF > HF_period/2 - Ts) // Connected at second half of period
-            {
-                g = 1;
-            }
-            if (counter_ONOFF >= HF_period) // reset counter if passes period value
-            {
-                g = 0;
-                counter_ONOFF = 0;
-            }
-            counter_ONOFF += Ts;
-            
-        }
-        if(seq_timer >= 1.2F) // Returns to IDLEMODE
+        if(seq_timer >= 0.9F) // Returns to IDLEMODE
         {
             mode = IDLEMODE;
-            counter_ONOFF = 0;
         }
-        
+
         seq_timer += Ts;
     }
 
