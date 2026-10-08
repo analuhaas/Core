@@ -87,11 +87,11 @@ static uint32_t off_time_delay = 40;  //equivalent to 1 s in critical task perio
 /* -------------- BOARD IDENTIFICATION ----------------------- */
 
 constexpr uint32_t UID_MMC_LEAD_BOARD = 0x002B002A;
-constexpr uint32_t UID_MMC_SM1_BOARD = 0x00330054;
-constexpr uint32_t UID_MMC_SM2_BOARD = 0x0033004B;
+constexpr uint32_t UID_MMC_SM1_BOARD = 0x0033004C;
+constexpr uint32_t UID_MMC_SM2_BOARD = 0x0031001B;
 constexpr uint32_t UID_MMC_SM3_BOARD = 0x00330049;
-constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004C;
-constexpr uint32_t UID_MMC_SM5_BOARD = 0x0031001B;
+constexpr uint32_t UID_MMC_SM4_BOARD = 0x0033004B;
+constexpr uint32_t UID_MMC_SM5_BOARD = 0x00330054;
 constexpr uint32_t UID_MMC_SM6_BOARD = 0x11118888;
 constexpr uint32_t UID_MMC_SM7_BOARD = 0x11119999;
 constexpr uint32_t UID_MMC_SM8_BOARD = 0x1111AAA0;
@@ -549,6 +549,10 @@ static float32_t Ts = control_task_period * 1e-6F;
 static float32_t modulation_signal_upper;
 static float32_t modulation_signal_lower;
 
+/* Rotating connection order */
+static float32_t angle_past = 0.0F; // Previous angle, used to detect the start of a new 50 Hz period
+static uint8_t rotation_offset = 0; // First module of the connection order (0 -> M1 first, 1 -> M2 first, ...)
+
 /* --------------SETUP FUNCTIONS------------------------------- */
 
 /* Function to control the LEDs in the low level */
@@ -722,7 +726,7 @@ void setup_routine()
         task.createBackground(loop_background_task);
 
     /* Uncomment following line if you use the critical task */
-    task.createCritical(loop_critical_task, 100);
+    task.createCritical(loop_critical_task, control_task_period);
 
     shield.sensors.enableDefaultTwistSensors();
 
@@ -857,6 +861,18 @@ void loop_critical_task()
             /* Connection sequence from NLM */
             angle += w0 * Ts;
             angle = ot_modulo_2pi(angle);
+
+            /* Angle wrap means a new 50 Hz period: rotate the connection order by one module */
+            if (angle < angle_past)
+            {
+                rotation_offset = (rotation_offset + 1) % total_number_of_modules_arm;
+                for (uint8_t counter = 0; counter < total_number_of_modules_arm; counter++)
+                {
+                    modules_indexes_upper_arm[counter] = (counter + rotation_offset) % total_number_of_modules_arm;
+                }
+            }
+            angle_past = angle;
+
             m = 1;
             modulation_signal_upper = (a + m * ot_sin(angle)) / (2.0);
             modulation_signal_lower = (a - m * ot_sin(angle)) / (2.0);
@@ -864,18 +880,18 @@ void loop_critical_task()
             number_of_connected_submodules_upper_arm = round(total_number_of_modules_arm*modulation_signal_upper); // recuperate for scope
             number_of_connected_submodules_lower_arm = round(total_number_of_modules_arm*modulation_signal_lower); // recuperate for scope
 
-            /* Gate assignment with preference order M1 > M2 > M3 */
+            /* Gate assignment following the rotating connection order (M1>M2>...>M5, then M2>...>M5>M1, ...) */
 
             for(uint8_t counter = 0; counter < total_number_of_modules_arm; counter++) // Choses the modules to connect according to chosen indexes
             {
                 if(counter < number_of_connected_submodules_upper_arm)
                 {
-                    uint8_t index_smallest_voltage_capacitor_upper_arm = modules_indexes_upper_arm[counter];
-                    g_u[index_smallest_voltage_capacitor_upper_arm] = 1;
+                    uint8_t index_order = modules_indexes_upper_arm[counter];
+                    g_u[index_order] = 1;
                 }
                 else{
-                    uint8_t index_smallest_voltage_capacitor_upper_arm = modules_indexes_upper_arm[counter];
-                    g_u[index_smallest_voltage_capacitor_upper_arm] = 0;
+                    uint8_t index_order = modules_indexes_upper_arm[counter];
+                    g_u[index_order] = 0;
                 }
 
             }
