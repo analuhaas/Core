@@ -24,6 +24,26 @@ syncMmax       = 0.95;           % Mp_AC above ~0.96 clips the DAC (0.52 offset)
 syncMaxIter    = 30;
 syncSettle_s   = 0.3;            % wait after writing before capturing
 maxCurrentClosingA = 0.1;
+
+% PQ diagram scan parameters (experimental version of fcn_step1_PQ_fullbridge_smallestconstraint_v3)
+target_angle_deg = 0:30:30; % [°] direction to search (0° = +P axis, 90° = +Q axis). Vector to sweep several angles in one run.
+step_M_init = 0.1; % initial step used to scan different modulation amplitudes (also the Jacobian calibration step)
+step_phi_init = 0.05; % [rad] initial step used to scan different modulation phases (also the Jacobian calibration step)
+delta_S_init = 10; % [VA] initial S step accepted from one PQ point to the next one
+zero_tol = 0.5; % [VA] acceptable |S| residual to accept the aligned point as the (P,Q)=(0,0) departure point
+Mmax = 0.95; % maximum modulation amplitude M_p allowed during the scan
+settle_elec_s = 0.5; % [s] wait before measuring a point used only for P and Q (Jacobian calibration, return ramp)
+settle_thermal_s = 10; % [s] wait before measuring a scanned point (temperatures must settle) - TO BE MEASURED
+return_steps = 10; % nb of steps of the ramp back to the departure point after each angle line
+PQ_axis_lim = 100; % [W]/[VAr] axis limits of the real time PQ figure
+PQ_save_file = 'PQ_scan_experimental.mat'; % file where the scan results are saved
+
+% Limits considered in the PQ diagram
+If_lim = 1.5; %low-side fuse current limit [A rms]
+Il_lim = 13; %low-side inductance current limit [A rms]
+% Iripple_lim = 1.5; %inductance current ripple limit [App] - not measured yet (PicoScope sampling << f_switching)
+Tj_lim = 448; %MOSFET temperature limit [K] (board Temp1)
+Tl_lim = 448; %inductance temperature limit [K] (board Temp2) - TO BE UPDATED
 %% ------------------------------------------------------------------
 %  USER SETTINGS FOR PICOSCOPE CONFIGURATION - edit these to match what you need
 %  ------------------------------------------------------------------
@@ -87,6 +107,7 @@ idxVs = 3;
 % i_c_pos = channel A (index 1), i_c_neg = channel B (index 2).
 idxIa = 1;   % Channel A (i_ac_2)
 idxIb = 2;   % Channel B (i_ac)
+idxIL = idxIb; % iL (inductor current) = i_ac = channel B
 %% Configuring Thingset communication with TWIST/SPIN board
 
 MEAS = "Measurements";
@@ -117,6 +138,9 @@ ts.write("Config", struct("wMpAC", 0.0));
 ts.write("Config", struct("wphi_AC", 0.0));
 
 %% Load PicoScope configuration information and device connection
+
+input('Current probes: turn on current probes, press enter to continue... ', 's');
+input('Before PicoScope connection: Check if current probes offset is close to 0 with PicoScope, press enter to continue... ', 's');
 
 [ps4000aStructs, ps4000aEnuminfo] = ps4000aSetConfig(); % DO NOT EDIT THIS LINE.
 
@@ -193,6 +217,14 @@ for s = 1:numScopes
 
 end
 dtScope = double(timeIntervalNanoSeconds{1}) * 1e-9;  % actual scope sample time
+
+%% Start the equipments
+
+input('Startup converter: check if software limit is at 2 A, press enter to continue... ', 's');
+input('Startup DC supply: check if DC supply limit is at 2 A, press enter to continue... ', 's');
+input('Startup DC supply: turn on DC supply, press enter to continue... ', 's');
+input('Startup AC source: check if Philibert limit is at 2 A, press enter to continue... ', 's');
+input('Startup AC source: turn on Philibert (check + validate button), press enter to continue... ', 's');
 
 %% Synchronize vs and vc automatically (switch must be OPEN)
 % Ramps Mp (-> v_c) and Mp_AC (-> v_s) up from 0 and adjusts phi_AC until
@@ -370,15 +402,254 @@ for step = 1:numResistorSteps + 1
 
 end
 
-%% Command converter to a certain PQ point
-Mp = Mp_init;
-phi_m = 0.0;
-Mp_AC = Mp_AC_init;
-phi_AC = phi_AC_init;
-ts.write("Config", struct("wMp", Mp));
-ts.write("Config", struct("wphi_m", phi_m));
-ts.write("Config", struct("wMpAC", Mp_AC));
-ts.write("Config", struct("wphi_AC", phi_AC));
+%% Command converter to a scan PQ diagram
+% Gets the main KPIs from PicoScope and board measurements to define the
+% Full-bridge converter PQ diagram until the first constraint is activated,
+% on each angle line of target_angle_deg.
+% 
+% Only (M_p, phi_m) of the converter are changed - the AC source (Mp_AC,
+% phi_AC) stays at the aligned values found by the sync section.
+%
+% Equivalence with measurements:
+% Vcap -> board VHigh, Pdc -> VHigh*IHigh,
+% iL -> i_ac (PicoScope), vinv -> v_c (PicoScope), vgrid -> v_s (PicoScope),
+% TJ -> board Temp1, TL -> board Temp2.
+% Not measured: icap, IMOS, VMOS, vL, v_AB and IL ripple (for now).
+
+% Initialize loop parameters
+k = 0; %initialize counter
+
+Mmod_anchor = Mp_init; %aligned point, (P,Q)~=(0,0) departure point
+phimod_anchor = phi_m_init;
+
+M = []; %modulation amplitude array that saves all M_p scanned
+phi_m = []; %modulation phase array that saves all phi_m scanned
+theta_scan = []; %angle line that produced each scanned point
+delta_S_step_fine = delta_S_init/2;
+singular_tol = 1e-6; %below this |det(A)| the two calibration steps are considered numerically parallel
+max_zero_iter = 3; %Newton correction iterations allowed to find that point
+step_scale_min = 0.5; %per-iteration clamp on the delta_S-based step_M/step_phi rescaling (avoids abrupt jumps)
+step_scale_max = 2;
+constraint_names = {'fuse current', 'inductance current', 'MOSFET current', 'IL ripple', 'MOSFET temperature', 'inductance temperature'};
+
+% Everything fcn_measure_PQ_point needs to command and measure one point
+meas_cfg.ts = ts;
+meas_cfg.measurements = measurements;
+meas_cfg.ps4000aDeviceObj = ps4000aDeviceObj{1};
+meas_cfg.numChannels = numChannels{1};
+meas_cfg.probeVoltsPerUnit = probeVoltsPerUnit{1};
+meas_cfg.idxVinv = idxVc;
+meas_cfg.idxVgrid = idxVs;
+meas_cfg.idxIL = idxIL;
+meas_cfg.dtScope = dtScope;
+meas_cfg.f0 = f0;
+meas_cfg.f_switching = f_switching;
+
+% The scope saturates before the current constraints if its range is too small
+if sqrt(2)*min(If_lim, Il_lim) > currentProbeRangeVolts/currentProbeVoltsPerAmp
+    warning('PQ scan: current channel range (%.2f A peak) is below the current limits - the scan will stop on scope overflow instead.', ...
+        currentProbeRangeVolts/currentProbeVoltsPerAmp)
+end
+
+% AC source set to aligned values
+ts.write("Config", struct("wMpAC", Mp_AC_init));
+ts.write("Config", struct("wphi_AC", phi_AC_init));
+
+% Initialize figure to verify PQ diagram in real time
+figure(75), axis square, hold on, grid on, box on
+
+xlabel('$P_c$ [W]','interpreter','latex')
+ylabel('$Q_c$ [VAr]','interpreter','latex')
+
+xlim([-PQ_axis_lim, PQ_axis_lim])
+ylim([-PQ_axis_lim, PQ_axis_lim])
+
+% Find the true (P,Q)=(0,0) departure point near (Mmod_anchor,phimod_anchor) and calibrate the local
+% Jacobian there once. Both are shared by every angle in target_angle_deg.
+% Calibration points only need P and Q, so they use the short electrical settle time.
+
+for it = 1:max_zero_iter
+
+    %anchor point
+    [P0, Q0, X0_Vcap_meas, X0_Idc_meas, X0_iL_meas, X0_vc_meas, X0_vs_meas, X0_T_Q1, X0_T_L, X0_PicoScope_overflow] = fcn_measure_PQ_point(meas_cfg, Mmod_anchor, phimod_anchor, settle_elec_s);
+
+    %pure-M calibration step
+    [P_M, Q_M, XM_Vcap_meas, XM_Idc_meas, XM_iL_meas, XM_vc_meas, XM_vs_meas, XM_T_Q1, XM_T_L, XM_PicoScope_overflow] = fcn_measure_PQ_point(meas_cfg, Mmod_anchor+step_M_init, phimod_anchor, settle_elec_s);
+
+    %pure-phi calibration step
+    [P_phi, Q_phi, Xphi_Vcap_meas, Xphi_Idc_meas, Xphi_iL_meas, Xphi_vc_meas, Xphi_vs_meas, Xphi_T_Q1, Xphi_T_L, Xphi_PicoScope_overflow] = fcn_measure_PQ_point(meas_cfg, Mmod_anchor, phimod_anchor+step_phi_init, settle_elec_s);
+
+    %calibration steps must stay far from the limits - otherwise step_M_init/step_phi_init are too big
+    if any([X0_PicoScope_overflow, XM_PicoScope_overflow, Xphi_PicoScope_overflow]) || ...
+            max([rms(X0_iL_meas), rms(XM_iL_meas), rms(Xphi_iL_meas)]) > min(If_lim, Il_lim)
+        fcn_write_M_phi(ts, Mp_init, phi_m_init);
+        error('PQ scan: current limit or scope overflow during Jacobian calibration - reduce step_M_init/step_phi_init. Converter back to the aligned point.')
+    end
+
+    %A maps normalized steps u = [dM/step_M_init; dphi/step_phi_init] to [dP;dQ]
+    A = [P_M-P0, P_phi-P0; Q_M-Q0, Q_phi-Q0];
+
+    if abs(det(A)) < singular_tol
+        warning('PQ scan: pure-M and pure-phi steps produce (nearly) parallel PQ directions at (M=%g,phi=%g), cannot refine the zero point further.', Mmod_anchor, phimod_anchor)
+        break
+    end
+
+    if hypot(P0,Q0) <= zero_tol
+        break
+    end
+
+    u0 = A\(-[P0;Q0]); %Newton correction towards (P,Q)=(0,0), in units of (step_M_init,step_phi_init)
+    Mmod_anchor = Mmod_anchor + u0(1)*step_M_init;
+    phimod_anchor = phimod_anchor + u0(2)*step_phi_init;
+end
+
+if hypot(P0,Q0) > zero_tol
+    warning('PQ scan: Newton correction did not reach |S|<=%g after %d iteration(s) (final |S|=%g); continuing with the best anchor found.', zero_tol, max_zero_iter, hypot(P0,Q0))
+end
+
+fprintf('PQ scan: departure point Mp = %.4f, phi_m = %+.4f rad | P0 = %.2f W, Q0 = %.2f VAr\n', Mmod_anchor, phimod_anchor, P0, Q0);
+plot(P0,Q0,'ob','MarkerSize',9) % refined (P,Q)~=(0,0) anchor shared by every angle below
+drawnow
+
+% Loop beginning to define PQ points in the target_angle_deg angle lines
+for theta_deg_loop = target_angle_deg
+
+    theta = deg2rad(theta_deg_loop); %conversion from rad to degrees
+
+    % Direction definition: solve the Jacobian for this angle's direction
+    d = [cos(theta); sin(theta)]; %desired unit direction in the PQ plane
+    u = A\d; %u = [u_M; u_phi], direction in units of (step_M_init, step_phi_init)
+    u = u/norm(u); %unit-normalize so neither component is pinned/divided-by -> avoids blow-up when one axis barely contributes
+
+    step_M = step_M_init * u(1);
+    step_phi = step_phi_init * u(2);
+
+    Mmod_loop = Mmod_anchor;
+    phimod_loop = phimod_anchor;
+    Mmod_written = Mmod_anchor; %last point commanded to the converter, start of the return ramp
+    phimod_written = phimod_anchor;
+    delta_S_step = delta_S_init;
+    delta_S = delta_S_init;
+    S_prev = NaN; %S of the previous point of this angle line (not of the previous angle)
+    black_point = false;
+
+    %black x point - at least one constraint is activated, setting the PQ diagram limit
+    while(~black_point)
+
+        if(Mmod_loop > Mmax || Mmod_loop < 0) %modulation limit reached before any constraint
+            warning('PQ scan: theta = %d deg stopped at the modulation limit (M_p = %.4f) before any constraint.', theta_deg_loop, Mmod_loop)
+            break
+        end
+
+        idx_done = intersect(find(round(M,4) == round(Mmod_loop,4)), find(round(phi_m,4) == round(phimod_loop,4)));
+
+        if(isempty(idx_done)) %verifies if the (M_p, phi_m) point was already scanned in order to avoid over measuring
+            %if the (M_p, phi_m) point is NEW, we measure it
+            k = k+1; %update counter (only for new points, so the arrays have no gaps)
+
+            %get input
+            phi_m(k) = phimod_loop;
+            M(k) = Mmod_loop;
+            theta_scan(k) = theta_deg_loop; %records which target_angle_deg produced this point, for step2 to isolate a single angle afterward
+
+            [P_iter, Q_iter, Vcap_meas, Idc_meas, iL_meas, vc_meas, vs_meas, T_Q1, T_L, PicoScope_overflow] = fcn_measure_PQ_point(meas_cfg, Mmod_loop, phimod_loop, settle_thermal_s);
+            Mmod_written = Mmod_loop;
+            phimod_written = phimod_loop;
+
+            %save power
+            P(k) = P_iter; %active power
+            Q(k) = Q_iter; %reactive power
+            S(k) = sqrt(P(k)^2 + Q(k)^2);
+
+            %calculate KPIs
+            % IL_ripple(k) = fcn_ripple_calc(iL_meas,f_switching,dtScope); %inductor current ripple - needs PicoScope sampling >> f_switching
+            dVcap(k) = Vcap_meas; %(TO BE UPDATED AFTER)
+            maxVcap(k) = Vcap_meas + Vcap_meas/2; %mean value + half the peak-to-peak ripple (TO BE UPDATED AFTER)
+            rmsIL(k) = rms(iL_meas);
+            maxIL(k) = max(abs(iL_meas));
+            dIL(k) = max(iL_meas)-min(iL_meas);
+            rmsVinv(k) = rms(vc_meas);
+            rmsVgrid(k) = rms(vs_meas);
+            Pdc_meas(k) = Vcap_meas*Idc_meas; %dc-side power from the board mean values
+            TJ(k) = T_Q1 + 273.15; %MOSFET Q1 temperature [K] (board Temp1 [degC])
+            TL(k) = T_L + 273.15; %inductance temperature [K] (board Temp2 [degC])
+            overflow_scan(k) = PicoScope_overflow; %PicoScope range exceeded on at least one channel
+
+            constraints(1,k) = (rmsIL(k)-If_lim)/If_lim; %fuse current constraint
+            constraints(2,k) = (rmsIL(k)-Il_lim)/Il_lim; %inductance current constraint
+            constraints(3,k) = NaN; %mosfet current constraint - IMOS not measured
+            constraints(4,k) = NaN; %inductor current ripple constraint - not measured yet
+            constraints(5,k) = (TJ(k)-Tj_lim)/Tj_lim; %mosfet temperature constraint
+            constraints(6,k) = (TL(k)-Tl_lim)/Tl_lim; %inductance temperature constraint
+
+            if(~isnan(S_prev))
+                delta_S = abs(S(k)-S_prev);
+            else
+                delta_S = delta_S_init;
+            end
+            S_prev = S(k);
+
+            fprintf('PQ theta %3d deg | pt %3d | Mp %.4f phi_m %+.4f | P %7.2f W Q %7.2f VAr | IL %.2f A rms | TJ %.1f K TL %.1f K\n', ...
+                theta_deg_loop, k, M(k), phi_m(k), P(k), Q(k), rmsIL(k), TJ(k), TL(k));
+
+            %verifies if we are close to constraints:
+            %black x point - at least one constraint is activated (or the scope saturates), setting the PQ diagram limit
+            %red point - we are in the 80% to 100% zone of at least one constraint, finer step_M is required
+            %grey point - we are below the 80% to 100% zone of all constraints, not much detail is needed so big step_M can be used
+            if(any(constraints(:,k)>=0) || overflow_scan(k)) %black x point
+                index_over = find(constraints(:,k)>=0);  %finds indexes of the constraints that were activated
+                if(overflow_scan(k))
+                    fprintf('PQ theta %3d deg | limit: PicoScope overflow\n', theta_deg_loop);
+                else
+                    fprintf('PQ theta %3d deg | limit: %s\n', theta_deg_loop, strjoin(constraint_names(index_over), ', '));
+                end
+                plot(P(k),Q(k),'xk','MarkerSize',9)
+                black_point = true;
+
+            elseif(any(constraints(:,k)>= -0.2)) %red point
+                delta_S_step = delta_S_step_fine;
+                plot(P(k),Q(k),'.r','MarkerSize',9)
+
+            else %grey point
+                plot(P(k),Q(k),'.','Color',"#EBEBEB",'MarkerSize',9)
+            end
+            drawnow
+
+        else
+            S_prev = S(idx_done(1)); %point already measured (e.g. the departure point), continue from its S
+        end
+
+        if(delta_S > 0)
+            scale = delta_S_step/delta_S;
+            scale = min(max(scale, step_scale_min), step_scale_max); %clamp so a single noisy delta_S can't cause a huge jump
+            step_M = step_M * scale;
+            step_phi = step_phi * scale;
+        end
+
+        %Update modulation amplitude for next loop
+        Mmod_loop = Mmod_loop + step_M;
+
+        %Update modulation phase for next loop
+        phimod_loop = phimod_loop + step_phi;
+
+    end
+
+    %Ramp back from the last commanded point to the departure point before the next angle line
+    for r = 1:return_steps
+        fcn_write_M_phi(ts, Mmod_written + (Mmod_anchor-Mmod_written)*r/return_steps, ...
+            phimod_written + (phimod_anchor-phimod_written)*r/return_steps);
+        pause(settle_elec_s)
+    end
+
+end
+
+% Export data
+save(PQ_save_file, 'M', 'phi_m', 'theta_scan', 'target_angle_deg', 'Mmod_anchor', 'phimod_anchor', 'A', ...
+    'P', 'Q', 'S', 'dVcap', 'maxVcap', 'rmsIL', 'maxIL', 'dIL', ...
+    'rmsVinv', 'rmsVgrid', 'Pdc_meas', 'TJ', 'TL', 'overflow_scan', 'constraints', 'constraint_names', ...
+    'If_lim', 'Il_lim', 'Tj_lim', 'Tl_lim', 'Mp_AC_init', 'phi_AC_init', '-v7.3')
+fprintf('PQ scan: %d points saved to %s\n', k, PQ_save_file);
+
 %% Converter acquisition
 
 V_high_value = ts.read(measurements("VHigh"));
@@ -512,7 +783,7 @@ ts.write("Config", struct("wMp", 0.0));
 ts.write("Config", struct("wphi_m", 0.0));
 ts.write("Config", struct("wMpAC", 0.0));
 ts.write("Config", struct("wphi_AC", 0.0));
-%% Disconnect devices
+%% Disconnect PicoScope devices
 
 for s = 1:numScopes
 
@@ -520,5 +791,11 @@ for s = 1:numScopes
     delete(ps4000aDeviceObj{s});
 
 end
-%% close connection
+%% Disconnect TWIST/SPIN
 ts.close();
+
+%% Stop the equipments
+
+input('DC supply: turn off DC supply, press enter to continue... ', 's');
+input('AC source: turn off Philibert (uncheck + validate button), press enter to continue... ', 's');
+input('Current probes: turn off current probes, press enter to continue... ', 's');
