@@ -123,7 +123,7 @@ static constexpr float32_t RMS_EMA_ALPHA = TS / RMS_EMA_TAU;
 /* Size of the scope buffer for data recording */
 static constexpr uint32_t SCOPE_BUFFER_SIZE = 1024;
 /* Number of channels recorded in the scope for diagnostics */
-static constexpr uint8_t SCOPE_CHANNEL_COUNT = 21;
+static constexpr uint8_t SCOPE_CHANNEL_COUNT = 15;
 
 /* State of the PWM outputs */
 static bool pwm_enable = false;
@@ -409,14 +409,6 @@ void setup_scope()
 {
     scope.connectChannel(I1_low_value, "I1_low_value");
     scope.connectChannel(I2_low_value, "I2_low_value");
-    scope.connectChannel(I1_rms, "I1_rms");
-    scope.connectChannel(I2_rms, "I2_rms");
-    scope.connectChannel(I1_rms_peak, "I1_rms_peak");
-    scope.connectChannel(I2_rms_peak, "I2_rms_peak");
-    scope.connectChannel(I1_rms_ema, "I1_rms_ema");
-    scope.connectChannel(I2_rms_ema, "I2_rms_ema");
-    scope.connectChannel(Vhigh_ripple_pp, "Vhigh_ripple_pp");
-    scope.connectChannel(Vhigh_ripple_pct, "Vhigh_ripple_pct");
     scope.connectChannel(Vgrid_meas, "Vgrid");
     scope.connectChannel(V_high_filt, "Vdc");
     scope.connectChannel(local_vgrid, "local_vgrid");
@@ -427,7 +419,9 @@ void setup_scope()
     scope.connectChannel(duty_cycle_1, "duty_cycle_1");
     scope.connectChannel(duty_cycle_2, "duty_cycle_2");
     scope.connectChannel(state_mode_scope, "state");
-    scope.connectChannel(I_high_value, "state");
+    scope.connectChannel(I_high_value, "idc");
+    scope.connectChannel(temp_1_value, "T1");
+    scope.connectChannel(temp_2_value, "T2");
     scope.set_delay(0.5F);
     scope.set_trigger(a_trigger);
     scope.start();
@@ -725,32 +719,23 @@ void loop_application_task()
         dump_scope_datas(scope);
         is_downloading = false;
     } else {
+        
+        printk("%.3f:", (double)V_high_filt);
+        printk("%.3f:", (double)temp_1_value);
+        printk("%.3f\n", (double)temp_2_value);
         /*
-        printk("state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:Mp %.2f:Mp_src %.2f:phi_m %.2f:phi_src %.2f"
-                ":d1 %.3f:d2 %.3f\n",
-               mode,
-            //    "state %d:Vdc %.2f:Vgrid %.2f:Vlocal %.2f:amp %.2f:d1 %.3f:d2 %.3f"
-            //    ":I1rms %.3f:I2rms %.3f:I1rmsPk %.3f:I2rmsPk %.3f:I1rmsEma %.3f:I2rmsEma %.3f"
-            //    ":Vpp %.3f:Vpp%% %.2f\n",
-            //    mode,
-               static_cast<double>(V_high_filt),
-               static_cast<double>(Vgrid_meas),
-               static_cast<double>(local_vgrid),
-               static_cast<double>(Mp),
-               static_cast<double>(Mp_AC_source),
-               static_cast<double>(phi_m),
-               static_cast<double>(phi_AC_source),
-               static_cast<double>(duty_cycle_1),
-               static_cast<double>(duty_cycle_2));
-            //    static_cast<double>(I1_rms),
-            //    static_cast<double>(I2_rms),
-            //    static_cast<double>(I1_rms_peak),
-            //    static_cast<double>(I2_rms_peak),
-            //    static_cast<double>(I1_rms_ema),
-            //    static_cast<double>(I2_rms_ema),
-            //    static_cast<double>(Vhigh_ripple_pp),
-            //    static_cast<double>(Vhigh_ripple_pct));
-            */
+        printk("state %d:Vdc %.3f:Mp %.2f:Mp_src %.2f:phi_m %.2f:phi_src %.2f:d1 %.3f:d2 %.3f:T1 %.3f:T2 %.3f\n",
+            mode,
+            static_cast<double>(V_high_filt),
+            static_cast<double>(Mp),
+            static_cast<double>(Mp_AC_source),
+            static_cast<double>(phi_m),
+            static_cast<double>(phi_AC_source),
+            static_cast<double>(duty_cycle_1),
+            static_cast<double>(duty_cycle_2),
+            static_cast<double>(temp_1_value),
+            static_cast<double>(temp_2_value));
+        */
     }
 
     /* blink_period_s is writable over the ThingSet shell (Config/wBlinkPeriod_s) */
@@ -766,9 +751,9 @@ void loop_critical_task()
     update_teaching_sine();
     read_measurements();
     // update_rms();
-    update_rms_peak();
+    // update_rms_peak();
     // update_rms_ema();
-    update_voltage_ripple();
+    // update_voltage_ripple();
     calculate_power();
     
 

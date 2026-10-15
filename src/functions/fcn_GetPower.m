@@ -1,6 +1,6 @@
-function [Pab, Qab, Pfft, Qfft, P, Q] = fcn_GetPower(v,i,Ts,f0,f_switching)
-%FCN_GETPOWER Calculates the active and reactive power output on the AC
-%side of the converter
+function [Pab, Qab, Pfft, Qfft, P, Q, Pdc] = fcn_GetPower(v,i,Ts,f0,v_dc,i_dc)
+%FCN_GETPOWER Calculates the active and reactive power output on the AC and
+%DC sides of the converter
 
 %% output
 % P, Q
@@ -34,17 +34,14 @@ phi = angle(V1) - angle(I1);
 Pfft = Vrms*Irms*cos(phi);
 Qfft = Vrms*Irms*sin(phi);
 
-% ksw = round(f_switching*N/Fs) + 1;   % fundamental freq index
-% 
-% Vsw = V(ksw);
-% Isw = I(ksw);
-% 
-% Vsw = abs(Vsw)*2;
-% Isw = abs(Isw)*2;
 %% Calculate power data by traditional formula
 rms(v);
 rms(i);
 S = rms(v) * rms(i);
 P = mean(v .* i).*ones(length(S),1);
 Q = sqrt(S.^2 - P.^2);
-end 
+
+%% Calculate DC-side power
+
+Pdc = mean(v_dc .* i_dc);
+end
