@@ -596,6 +596,13 @@ void setup_routine()
 
     setup_scope();
 
+    shield.sensors.setConversionParametersLinear(V_HIGH, 0.0300473F, 0.288949F);
+    shield.sensors.setConversionParametersLinear(V1_LOW, 0.045065666F, -90.9069F);
+    shield.sensors.setConversionParametersLinear(V2_LOW, 0.045077775F, -91.036082F);
+    shield.sensors.setConversionParametersLinear(I1_LOW, 0.0049823408F, -10.452284F);
+    shield.sensors.setConversionParametersLinear(I2_LOW, 0.004929446F, -10.234404F);
+    shield.sensors.setConversionParametersLinear(I_HIGH, 0.00511002F, -10.4447F);
+
     uint32_t app_task_number = task.createBackground(loop_application_task);
     // uint32_t com_task_number = task.createBackground(loop_communication_task);
     task.createCritical(loop_critical_task, CONTROL_TASK_PERIOD_US);

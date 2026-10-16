@@ -307,6 +307,10 @@ syncCfg.Settle_s = syncSettle_s;
 
 [Mp_init, Mp_AC_init, phi_m_init, phi_AC_init, VcClkRef, syncAligned, syncCapture] = fcn_sync_vs_vc(syncCfg);
 
+% The board is now at the aligned point: keep the operating point variables
+% consistent with it (used by the next acquisitions and file names)
+Mp = Mp_init; phi_m = phi_m_init; Mp_AC = Mp_AC_init; phi_AC = phi_AC_init;
+
 if syncAligned
     input('Sync: start procedure to close the switch, press enter to continue... ', 's');
 end

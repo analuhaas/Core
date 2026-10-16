@@ -22,9 +22,16 @@ function [scopeMimicry, scopeNames, scopeData] = fcn_scope_mimicry_acquisition(t
 flush(con);
 ts.write("Config", struct("wScopeArm", 1));
 t0 = tic;
-while ts.read("Measurements/rScopeState") ~= 2
+while true
+    scopeState = ts.read("Measurements/rScopeState");
+    if isstring(scopeState) || ischar(scopeState)
+        scopeState = str2double(scopeState); % garbled response: NaN, treated as not ready
+    end
+    if isequal(scopeState, 2)
+        break;
+    end
     if toc(t0) > timeout_s
-        error('ScopeMimicry: capture not complete after %.1f s.', timeout_s);
+        error('ScopeMimicry: capture not complete after %.1f s (last state read: %s).', timeout_s, mat2str(scopeState));
     end
     pause(0.05);
 end
