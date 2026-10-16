@@ -411,8 +411,8 @@ void setup_scope()
     scope.connectChannel(I2_low_value, "I2_low_value");
     scope.connectChannel(Vgrid_meas, "Vgrid");
     scope.connectChannel(V_high_filt, "Vdc");
-    scope.connectChannel(local_vgrid, "local_vgrid");
-    scope.connectChannel(local_modulation, "local_modulation");
+    scope.connectChannel(power_d, "P_board");   /* active power from calculate_power() [W] */
+    scope.connectChannel(power_q, "Q_board");   /* reactive power from calculate_power() [VAr] */
     scope.connectChannel(sine, "sine");
     scope.connectChannel(sine_modulation, "sine_modulation");
     scope.connectChannel(delta_duty_cycle, "duty_cycle");
@@ -715,14 +715,23 @@ void loop_application_task()
         mode = IDLEMODE;
     }
 
+    /* Dump the captured buffer on the console port when asked over ThingSet
+     * (Config/wScopeDump), same as the 'r' serial command */
+    if (scope_dump_asked) {
+        scope_dump_asked = 0;
+        is_downloading = true;
+        trigger = false;
+    }
+
     if (is_downloading) {
         dump_scope_datas(scope);
         is_downloading = false;
     } else {
-        
+        /*
         printk("%.3f:", (double)V_high_filt);
         printk("%.3f:", (double)temp_1_value);
         printk("%.3f\n", (double)temp_2_value);
+        */
         /*
         printk("state %d:Vdc %.3f:Mp %.2f:Mp_src %.2f:phi_m %.2f:phi_src %.2f:d1 %.3f:d2 %.3f:T1 %.3f:T2 %.3f\n",
             mode,
@@ -782,7 +791,16 @@ void loop_critical_task()
     }
 
     state_mode_scope = static_cast<float32_t>(mode);
-    scope.acquire();
+
+    /* Re-arm and trigger a new capture when asked over ThingSet (Config/wScopeArm).
+     * start() resets the previous trigger edge, so trigger = true is seen as a new
+     * rising edge. Ignored while dumping, to keep the buffer frozen. */
+    if (scope_arm_asked && !is_downloading) {
+        scope_arm_asked = 0;
+        scope.start();
+        trigger = true;
+    }
+    scope_state = static_cast<uint8_t>(scope.acquire());
 }
 
 /**

@@ -26,23 +26,34 @@ syncMaxIter    = 30;
 syncSettle_s   = 0.3;            % wait after writing before capturing
 maxCurrentClosingA = 0.1;
 
-%  V_s regulation parameters (keeps v_s amplitude and phase fixed when current flows)
-vsRegTolV       = 0.02;            % [V rms] amplitude tolerance on v_s
-vsRegTolPhi     = 0.001;   % [rad] phase tolerance on v_s (relative to the internal oscillator)
-vsRegAlpha      = 0.5;            % fraction of the remaining error corrected per iteration
-vsRegMaxStepM   = 0.03;           % max change of Mp_AC per iteration
-vsRegMaxStepPhi = 0.1;            % [rad] max change of phi_AC per iteration
-vsRegMaxIter    = 20;
-vsRegSettle_s   = 0.1;            % wait after writing before capturing
+%  V_c regulation parameters (keeps v_c amplitude and phase fixed when current flows)
+vcRegTolV       = 0.02;            % [V rms] amplitude tolerance on v_c
+vcRegTolPhi     = 0.001;   % [rad] phase tolerance on v_c (relative to the internal oscillator)
+vcRegAlpha      = 0.5;            % fraction of the remaining error corrected per iteration
+vcRegMaxStepM   = 0.03;           % max change of Mp_AC per iteration
+vcRegMaxStepPhi = 0.1;            % [rad] max change of phi_AC per iteration
+vcRegMaxIter    = 20;
+vcRegSettle_s   = 0.1;            % wait after writing before capturing
 
 %  MOSFET temperature monitoring parameters (to check thermal steady state)
-tempMonitorDuration_s = 1800;      % [s] total monitoring time (10 min)
-tempMonitorPeriod_s   = 0.5;       % [s] time between two temperature readings (1 min)
+tempMonitorDuration_s = 3600;      % [s] total monitoring time (30 min)
+tempMonitorPeriod_s   = 60;       % [s] time between two temperature readings (1 min)
+tempBurstCount        = 30;       % each reading is the mean of this many single readings...
+tempBurstSpacing_s    = 0.1;      % [s] ...spaced by this time
+
+%  MOSFET temperature series parameters (single readings, no averaging)
+tempSeriesPoints    = 1000;       % number of Temp1/Temp2 readings
+tempSeriesSpacing_s = 1;          % [s] time between two readings
 
 %  Ramp parameters of the converter operating point (Mp, phi_m)
 rampMaxStepM    = 0.001;          % max change of Mp per step
-rampMaxStepPhi  = 0.0001;          % [rad] max change of phi_m per step
-rampStepPause_s = 0.2;            % wait after each step
+rampMaxStepPhi  = 0.01;          % [rad] max change of phi_m per step
+rampStepPause_s = 0.05;            % wait after each step
+
+%  ScopeMimicry parameters (board scope, dumped on the console port)
+consolePort    = "";              % board console port, e.g. "COM41" - "" = the board port not used by ThingSet
+scopeTs        = 100e-6;          % [s] ScopeMimicry sample time (CONTROL_TASK_PERIOD_US in main.cpp)
+scopeTimeout_s = 10;              % [s] max time to wait for the capture and for the dump
 %% ------------------------------------------------------------------
 %  USER SETTINGS FOR PICOSCOPE CONFIGURATION - edit these to match what you need
 %  ------------------------------------------------------------------
@@ -89,10 +100,18 @@ voltageChannelList = { ...
     'KP306/0011', 2; ... % Channel B
     'KP306/0011', 3; ... % Channel C
     'KP306/0011', 4; ... % Channel D
-    'KP310/0061', 1; ... % Channel A
     'KP310/0061', 4; ... % Channel D
     };
 maxExpectedVoltageV = 20;  % peak volts
+
+% Differential voltage probes: the scope sees the measured voltage divided by
+% the probe attenuation. The range is sized for maxExpectedDiffProbeV / attenuation
+% and the curves are scaled back to the measured voltage.
+% One row per probe: {serial, channel (1-based), attenuation}.
+diffProbeChannelList = { ...
+    'KP310/0061', 1, 10; ... % Channel A (u_dc), differential probe 1/10
+    };
+maxExpectedDiffProbeV = 60;  % [V] peak measured voltage (before the probe attenuation)
 
 % DAC output of the SPIN board (input of the power amplifier that generates
 % v_s).
@@ -144,6 +163,22 @@ for name = ts.fetchChildren(MEAS)
     end
 end
 
+%% Opening the console port of the TWIST/SPIN board (ScopeMimicry dump)
+% The board has two USB serial ports with the same VID: the ThingSet shell
+% (used by ts) and the console, where printk writes the ScopeMimicry dump.
+% Opened like ThingSetTools does, WITHOUT FlowControl: a DTR/RTS mismatch
+% resets the board into its bootloader.
+
+if consolePort == ""
+    consolePort = setdiff(ThingSetTools.findPorts("2FE3", "", false), ts.Port);
+end
+if numel(consolePort) ~= 1
+    error('Console port not found (candidates: %s) - set consolePort in the user settings.', strjoin(consolePort, ", "));
+end
+con = serialport(consolePort, 115200, "Timeout", 5);
+configureTerminator(con, "LF");
+fprintf('Console port (ScopeMimicry): %s | ThingSet port: %s\n', consolePort, ts.Port);
+
 %% Command converter to initial configuration
 
 ts.write("Config", struct("wBlinkPeriod_s",1.0));
@@ -157,6 +192,7 @@ ts.write("Config", struct("wphi_AC", 0.0));
 
 input('Current probes: turn on current probes, press enter to continue... ', 's');
 input('Before PicoScope connection: Check if current probes offset is close to 0 with PicoScope, press enter to continue... ', 's');
+input('Voltage probe: turn on voltage probe, press enter to continue... ', 's');
 
 [ps4000aStructs, ps4000aEnuminfo] = ps4000aSetConfig(); % DO NOT EDIT THIS LINE.
 
@@ -180,6 +216,8 @@ picoCfg.currentProbeVoltsPerAmp = currentProbeVoltsPerAmp;
 picoCfg.maxExpectedCurrentA = maxExpectedCurrentA;
 picoCfg.voltageChannelList = voltageChannelList;
 picoCfg.maxExpectedVoltageV = maxExpectedVoltageV;
+picoCfg.diffProbeChannelList = diffProbeChannelList;
+picoCfg.maxExpectedDiffProbeV = maxExpectedDiffProbeV;
 picoCfg.dacSerial = dacSerial;
 picoCfg.dacChannel = idxVdac;
 picoCfg.maxExpectedDacV = maxExpectedDacV;
@@ -210,16 +248,18 @@ ts.write("Config", struct("wphi_AC", phi_AC));
 
 boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
 [channelData, numSamples] = fcn_picoscope_acquisition_scopes(ps4000aDeviceObj, numChannels, probeVoltsPerUnit);
+scopeMimicry = fcn_scope_mimicry_acquisition(ts, con, scopeTs, scopeTimeout_s);
 fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
+fcn_plot_scope_mimicry(scopeMimicry);
 
 % Calculate active, reactive and DC power and save the PQ point
 [Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
-    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching);
+    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching, scopeMimicry);
 
 %% Synchronize vs and vc automatically (switch must be OPEN)
 % Ramps Mp (-> v_c) and Mp_AC (-> v_s) up from 0 and adjusts phi_AC until
 % both voltages reach syncVref rms and are in phase, with phi_m = 0 fixed.
-% Also gives VsClkRef phasor, the no-load reference of the v_s regulation.
+% Also gives VcClkRef phasor, the no-load reference of the v_c regulation.
 
 % Everything fcn_sync_vs_vc needs to command the converter/AC source and measure v_c, v_s
 syncCfg.ts = ts;
@@ -243,7 +283,7 @@ syncCfg.Mmax = syncMmax;
 syncCfg.MaxIter = syncMaxIter;
 syncCfg.Settle_s = syncSettle_s;
 
-[Mp_init, Mp_AC_init, phi_m_init, phi_AC_init, VsClkRef, syncAligned] = fcn_sync_vs_vc(syncCfg);
+[Mp_init, Mp_AC_init, phi_m_init, phi_AC_init, VcClkRef, syncAligned, syncCapture] = fcn_sync_vs_vc(syncCfg);
 
 if syncAligned
     input('Sync: start procedure to close the switch, press enter to continue... ', 's');
@@ -252,11 +292,13 @@ end
 
 boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
 [channelData, numSamples] = fcn_picoscope_acquisition_scopes(ps4000aDeviceObj, numChannels, probeVoltsPerUnit);
+scopeMimicry = fcn_scope_mimicry_acquisition(ts, con, scopeTs, scopeTimeout_s);
 fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
+fcn_plot_scope_mimicry(scopeMimicry);
 
 % Calculate active, reactive and DC power and save the PQ point
 [Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
-    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching);
+    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching, scopeMimicry);
 
 %% Close the switch gradually through the parallel resistors
 % Steps 1-6: one resistance added in parallel (from open circuit
@@ -296,91 +338,129 @@ end
 
 boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
 [channelData, numSamples] = fcn_picoscope_acquisition_scopes(ps4000aDeviceObj, numChannels, probeVoltsPerUnit);
+scopeMimicry = fcn_scope_mimicry_acquisition(ts, con, scopeTs, scopeTimeout_s);
 fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
+fcn_plot_scope_mimicry(scopeMimicry);
 
 % Calculate active, reactive and DC power and save the PQ point
 [Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
-    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching);
+    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching, scopeMimicry);
 
-%% Command converter to a certain PQ point
-% Ramps (Mp, phi_m) from the aligned point (Mp_init, phi_m_init) to the target
-Mp_target = Mp_init+0.01;
-phi_m_target = 0.0;
-Mp_AC = Mp_AC_init;
-phi_AC = phi_AC_init;
+%% Command converter to some certain PQ points
 
-ts.write("Config", struct("wmode", 1));
-ts.write("Config", struct("wMpAC", Mp_AC));
-ts.write("Config", struct("wphi_AC", phi_AC));
-[Mp, phi_m] = fcn_ramp_M_phi(ts, Mp_init, phi_m_init, Mp_target, phi_m_target, ...
-    rampMaxStepM, rampMaxStepPhi, rampStepPause_s);
-%% Converter and PicoScope acquisition, process data - AFTER SETTING PQ CHECKPOINT
+Delta_Mp_list = [0.08,-0.08,0,0,0.06,-0.06,0.06,-0.06];
+Delta_phi_list = [0,0,0.2,-0.2,0.15,-0.15,-0.15,0.15];
 
-boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
-[channelData, numSamples] = fcn_picoscope_acquisition_scopes(ps4000aDeviceObj, numChannels, probeVoltsPerUnit);
-fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
+% One PQ point per pair (Delta_Mp_list(k), Delta_phi_list(k))
 
-% Calculate active, reactive and DC power and save the PQ point
-[Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
-    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching);
+% Live PQ diagram: each point before and after the v_c regulation, around
+% the aligned point measured right after the switch was closed
+PQ_aligned = [Pfft, Qfft];
+PQ_before = NaN(length(Delta_Mp_list), 2);
+PQ_after = NaN(length(Delta_Mp_list), 2);
+PQ_board_before = NaN(length(Delta_Mp_list), 2); % board P/Q (mean of ScopeMimicry P_board, Q_board)
+PQ_board_after = NaN(length(Delta_Mp_list), 2);
+figurePQ = figure('Name', 'PQ diagram (live)', 'NumberTitle', 'off');
+fcn_plot_PQ_live(figurePQ, PQ_aligned, PQ_before, PQ_after, PQ_board_before, PQ_board_after);
 
-%% Regulate v_s amplitude and phase at this PQ point
-% v_s is generated by a power amplifier + transformer, so it drops and
-% shifts with the converter current. Mp_AC and phi_AC are corrected until
-% v_s is back to the amplitude (syncVref) and phase (relative to the
-% internal oscillator) it had at no load during the sync - like an ideal
-% grid. The converter operating point (Mp, phi_m) is not changed.
+for k = 1:length(Delta_Mp_list)
 
-% Everything fcn_regulate_Vs needs to command the AC source and measure v_s
-vsReg.ts = ts;
-vsReg.ps4000aDeviceObj = ps4000aDeviceObj{1};
-vsReg.numChannels = numChannels{1};
-vsReg.probeVoltsPerUnit = probeVoltsPerUnit{1};
-vsReg.idxVs = idxVc;
-vsReg.idxVdac = idxVdac;
-vsReg.dtScope = dtScope;
-vsReg.f0 = f0;
-vsReg.TolV = vsRegTolV;
-vsReg.TolPhi = vsRegTolPhi;
-vsReg.Alpha = vsRegAlpha;
-vsReg.MaxStepM = vsRegMaxStepM;
-vsReg.MaxStepPhi = vsRegMaxStepPhi;
-vsReg.MaxIter = vsRegMaxIter;
-vsReg.Settle_s = vsRegSettle_s;
-vsReg.Mmax = syncMmax;
-vsReg.Vmax = syncVmax;
+    Delta_Mp = Delta_Mp_list(k);
+    Delta_phi = Delta_phi_list(k);
+    fprintf('PQ point %d/%d: Delta_Mp = %+.3f, Delta_phi = %+.3f rad\n', k, length(Delta_Mp_list), Delta_Mp, Delta_phi);
+    
+    % Command converter to a certain PQ point
+    % Ramps (Mp, phi_m) from the aligned point (Mp_init, phi_m_init) to the target
+    Mp_target = Mp_init+Delta_Mp;
+    phi_m_target = Delta_phi;
+    Mp_AC = Mp_AC_init;
+    phi_AC = phi_AC_init;
+    
+    ts.write("Config", struct("wBlinkPeriod_s",1.0));
+    ts.write("Config", struct("wmode", 1));
+    ts.write("Config", struct("wMpAC", Mp_AC));
+    ts.write("Config", struct("wphi_AC", phi_AC));
+    [Mp, phi_m] = fcn_ramp_M_phi(ts, Mp_init, phi_m_init, Mp_target, phi_m_target, ...
+        rampMaxStepM, rampMaxStepPhi, rampStepPause_s);
+    
+    % Converter and PicoScope acquisition, process data - AFTER SETTING PQ CHECKPOINT
+    
+    boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
+    [channelData, numSamples] = fcn_picoscope_acquisition_scopes(ps4000aDeviceObj, numChannels, probeVoltsPerUnit);
+    scopeMimicry = fcn_scope_mimicry_acquisition(ts, con, scopeTs, scopeTimeout_s);
+    fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
+    fcn_plot_scope_mimicry(scopeMimicry);
+    
+    % Calculate active, reactive and DC power and save the PQ point
+    [Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
+        Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching, scopeMimicry);
+    PQ_before(k, :) = [Pfft, Qfft];
+    PQ_board_before(k, :) = [mean(scopeMimicry.P_board), mean(scopeMimicry.Q_board)];
+    fcn_plot_PQ_live(figurePQ, PQ_aligned, PQ_before, PQ_after, PQ_board_before, PQ_board_after);
 
-[Mp_AC, phi_AC, VsClk, vsRegulated] = fcn_regulate_Vs(vsReg, Mp_AC, phi_AC, VsClkRef);
+    % Regulate v_c amplitude and phase at this PQ point
+    % v_s is generated by a power amplifier + transformer and the closed switch
+    % adds a voltage drop between v_s and v_c, so v_c drops and shifts with the
+    % converter current. Mp_AC and phi_AC are corrected until v_c is back to the
+    % amplitude (syncVref) and phase (relative to the internal oscillator) it had
+    % at no load at the end of the sync - like an ideal grid at the converter
+    % terminals. The converter operating point (Mp, phi_m) is not changed.
 
-fprintf('Vs regulation: Mp_AC = %.4f, phi_AC = %+.4f rad | Vs = %.2f V rms, phase error %+.2f deg\n', ...
-    Mp_AC, phi_AC, abs(VsClk), rad2deg(angle(VsClk / VsClkRef)));
+    % Everything fcn_regulate_Vc needs to command the AC source and measure v_c, v_s
+    vcReg.ts = ts;
+    vcReg.ps4000aDeviceObj = ps4000aDeviceObj{1};
+    vcReg.numChannels = numChannels{1};
+    vcReg.probeVoltsPerUnit = probeVoltsPerUnit{1};
+    vcReg.idxVc = idxVc;
+    vcReg.idxVs = idxVs;
+    vcReg.idxVdac = idxVdac;
+    vcReg.dtScope = dtScope;
+    vcReg.f0 = f0;
+    vcReg.TolV = vcRegTolV;
+    vcReg.TolPhi = vcRegTolPhi;
+    vcReg.Alpha = vcRegAlpha;
+    vcReg.MaxStepM = vcRegMaxStepM;
+    vcReg.MaxStepPhi = vcRegMaxStepPhi;
+    vcReg.MaxIter = vcRegMaxIter;
+    vcReg.Settle_s = vcRegSettle_s;
+    vcReg.Mmax = syncMmax;
+    vcReg.Vmax = syncVmax;
 
-%% Converter and PicoScope acquisition, process data - AFTER V_S REGULATION CHECKPOINT
+    [Mp_AC, phi_AC, VcClk, vcRegulated, ~, regCapture] = fcn_regulate_Vc(vcReg, Mp_AC, phi_AC, VcClkRef);
 
-boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
-[channelData, numSamples] = fcn_picoscope_acquisition_scopes(ps4000aDeviceObj, numChannels, probeVoltsPerUnit);
-fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
+    fprintf('Vc regulation: Mp_AC = %.4f, phi_AC = %+.4f rad | Vc = %.2f V rms, phase error %+.2f deg\n', ...
+        Mp_AC, phi_AC, abs(VcClk), rad2deg(angle(VcClk / VcClkRef)));
 
-% Calculate active, reactive and DC power and save the PQ point
-[Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
-    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching);
+    % v_c after the regulation vs its reference from the alignment, with the DAC voltages
+    fcn_plot_vc_regulation(syncCapture, regCapture, f0);
 
-%% Monitor MOSFET temperature to check thermal steady state
-% Reads Temp1 and Temp2 every tempMonitorPeriod_s for tempMonitorDuration_s,
-% then plots them so the user can judge if they are stable.
+    % Converter and PicoScope acquisition, process data - AFTER V_C REGULATION CHECKPOINT
+    
+    boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
+    [channelData, numSamples] = fcn_picoscope_acquisition_scopes(ps4000aDeviceObj, numChannels, probeVoltsPerUnit);
+    scopeMimicry = fcn_scope_mimicry_acquisition(ts, con, scopeTs, scopeTimeout_s);
+    fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
+    fcn_plot_scope_mimicry(scopeMimicry);
+    
+    % Calculate active, reactive and DC power and save the PQ point
+    [Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
+        Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching, scopeMimicry);
+    PQ_after(k, :) = [Pfft, Qfft];
+    PQ_board_after(k, :) = [mean(scopeMimicry.P_board), mean(scopeMimicry.Q_board)];
+    fcn_plot_PQ_live(figurePQ, PQ_aligned, PQ_before, PQ_after, PQ_board_before, PQ_board_after);
 
-[tempMonitorTime_s, tempMonitorTemp1, tempMonitorTemp2, figureTemp] = ...
-    fcn_monitor_temperature(ts, measurements, tempMonitorDuration_s, tempMonitorPeriod_s);
+    % Command converter to aligned PQ point
+    % Ramps (Mp, phi_m) back from the current PQ point to the aligned point
+    % (Mp_init, phi_m_init), then sets the AC source back to its aligned values
+    
+    [Mp, phi_m] = fcn_ramp_M_phi(ts, Mp, phi_m, Mp_init, phi_m_init, rampMaxStepM, rampMaxStepPhi, rampStepPause_s);
+    
+    Mp_AC = Mp_AC_init;
+    phi_AC = phi_AC_init;
+    ts.write("Config", struct("wMpAC", Mp_AC));
+    ts.write("Config", struct("wphi_AC", phi_AC));
 
-%% Converter and PicoScope acquisition, process data
-
-boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
-[channelData, numSamples] = fcn_picoscope_acquisition_scopes(ps4000aDeviceObj, numChannels, probeVoltsPerUnit);
-fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
-
-% Calculate active, reactive and DC power and save the PQ point
-[Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
-    Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching);
+end
 
 %% Command converter to aligned PQ point
 % Ramps (Mp, phi_m) back from the current PQ point to the aligned point
@@ -392,7 +472,6 @@ Mp_AC = Mp_AC_init;
 phi_AC = phi_AC_init;
 ts.write("Config", struct("wMpAC", Mp_AC));
 ts.write("Config", struct("wphi_AC", phi_AC));
-
 %% Open the switch gradually through the parallel resistors
 % Steps 1: switch open.
 % Step 2-7: take out one resistance added in parallel (from short circuit
@@ -445,6 +524,7 @@ for s = 1:numScopes
 end
 %% close connection
 ts.close();
+delete(con); % console port (ScopeMimicry)
 
 %% Stop the equipments
 

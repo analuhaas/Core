@@ -6,8 +6,11 @@ function [ps4000aDeviceObj, numChannels, channelLetters, timeIntervalNanoSeconds
 %   useTrigger, triggerChannel, triggerThreshold, triggerDirection,
 %   triggerAutoMs, secondsPerDivision, numDivisions, samplesPerDivision,
 %   currentProbeChannelList, currentProbeVoltsPerAmp, maxExpectedCurrentA,
-%   voltageChannelList, maxExpectedVoltageV, dacSerial, dacChannel,
-%   maxExpectedDacV).
+%   voltageChannelList, maxExpectedVoltageV, diffProbeChannelList,
+%   maxExpectedDiffProbeV, dacSerial, dacChannel, maxExpectedDacV).
+%   diffProbeChannelList rows are {serial, channel, attenuation}: the range
+%   is sized for maxExpectedDiffProbeV / attenuation and probeVoltsPerUnit
+%   is 1/attenuation, so the acquired curves are the measured voltage.
 %   ps4000aEnuminfo: from ps4000aSetConfig().
 %
 % Each PicoScope is its own independent icdevice object with its own
@@ -47,7 +50,7 @@ ps4000aDeviceObj  = cell(1, numScopes);
 numChannels       = cell(1, numScopes);
 channelLetters    = cell(1, numScopes);
 timeIntervalNanoSeconds = cell(1, numScopes);
-probeVoltsPerUnit = cell(1, numScopes); % 1 for plain voltage channels, currentProbeVoltsPerAmp for clamp channels
+probeVoltsPerUnit = cell(1, numScopes); % 1 for plain voltage channels, currentProbeVoltsPerAmp for clamp channels, 1/attenuation for differential probes
 probeUnit         = cell(1, numScopes); % 'V' or 'A' per channel, for labeling
 
 for s = 1:numScopes
@@ -82,6 +85,25 @@ for s = 1:numScopes
             channelRangeThisScope(picoCfg.voltageChannelList{row, 2}) = voltageChannelRangeIndex;
             % probeVoltsPerUnit / probeUnit stay at their defaults (1, 'V') -
             % no scaling needed for a direct, unattenuated connection.
+
+        end
+
+    end
+
+    for row = 1:size(picoCfg.diffProbeChannelList, 1)
+
+        if (strcmp(serial, picoCfg.diffProbeChannelList{row, 1}))
+
+            ch = picoCfg.diffProbeChannelList{row, 2};
+            attenuation = picoCfg.diffProbeChannelList{row, 3};
+            [diffProbeRangeIndex, diffProbeRangeVolts] = pico_select_voltage_range( ...
+                ps4000aEnuminfo, picoCfg.maxExpectedDiffProbeV / attenuation);
+            channelRangeThisScope(ch) = diffProbeRangeIndex;
+            probeVoltsPerUnit{s}(ch)  = 1 / attenuation; % scope volts per measured volt
+
+            fprintf('Differential probe %s ch %d (1/%g) sized for %.1f V peak -> %.2f V -> range %.2f V (index %d)\n', ...
+                serial, ch, attenuation, picoCfg.maxExpectedDiffProbeV, picoCfg.maxExpectedDiffProbeV / attenuation, ...
+                diffProbeRangeVolts, diffProbeRangeIndex);
 
         end
 

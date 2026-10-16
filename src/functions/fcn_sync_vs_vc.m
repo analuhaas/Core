@@ -1,4 +1,4 @@
-function [Mp_init, Mp_AC_init, phi_m_init, phi_AC_init, VsClkRef, syncAligned] = fcn_sync_vs_vc(syncCfg)
+function [Mp_init, Mp_AC_init, phi_m_init, phi_AC_init, VcClkRef, syncAligned, syncCapture] = fcn_sync_vs_vc(syncCfg)
 %FCN_SYNC_VS_VC synchronizes v_s and v_c automatically (switch must be OPEN)
 %   Ramps Mp (-> v_c) and Mp_AC (-> v_s) up from 0 and adjusts phi_AC until
 %   both voltages reach syncCfg.Vref rms and are in phase, with phi_m = 0
@@ -7,9 +7,11 @@ function [Mp_init, Mp_AC_init, phi_m_init, phi_AC_init, VsClkRef, syncAligned] =
 %
 %   syncCfg: struct with the devices and the tuning (e.g. tolerance parameters).
 %
-%   Returns the aligned operating point, VsClkRef (v_s phasor in the
-%   internal oscillator frame at no load, reference of fcn_regulate_Vs) and
+%   Returns the aligned operating point, VcClkRef (v_c phasor in the
+%   internal oscillator frame at no load, reference of fcn_regulate_Vc) and
 %   whether the alignment tolerances were met. Plots the last capture.
+%   syncCapture: that last capture (fields t, v_c, v_dac, Mp_AC, phi_AC),
+%   to compare it with the v_c regulation (fcn_plot_vc_regulation).
 
 % Auxiliary function that limits to max value (positive and negative)
 clip = @(x, lim) min(max(x, -lim), lim);
@@ -116,11 +118,11 @@ for k = 1:syncCfg.MaxIter
 
 end
 
-% Reference for the v_s regulation: phase of v_s relative to the internal
+% Reference for the v_c regulation: phase of v_c relative to the internal
 % oscillator at no load (last capture, switch open), with amplitude Vref.
 % The DAC output gives the oscillator phase within the same capture.
 Vdac = fcn_FundamentalPhasor(channelData{syncCfg.idxVdac} / syncCfg.probeVoltsPerUnit(syncCfg.idxVdac), syncCfg.dtScope, syncCfg.f0);
-VsClkRef = syncCfg.Vref * exp(1j * angle(Vs * conj(Vdac) / abs(Vdac) * exp(1j * phi_AC_init)));
+VcClkRef = syncCfg.Vref * exp(1j * angle(Vc * conj(Vdac) / abs(Vdac) * exp(1j * phi_AC_init)));
 
 % Plot the last capture of the loop (the one that met the alignment
 % criteria) to check v_c and v_s visually before closing the switch.
@@ -128,7 +130,14 @@ vcSync = channelData{syncCfg.idxVc} / scaleVc;
 vsSync = channelData{syncCfg.idxVs} / scaleVs;
 tSyncMs = (0:numel(vcSync) - 1) * syncCfg.dtScope * 1e3;
 
-figure('Name', 'Alignment of v_c and v_s', 'NumberTitle', 'off');
+% Last capture, reference of the v_c regulation
+syncCapture.t = (0:numel(vcSync) - 1).' * syncCfg.dtScope;
+syncCapture.v_c = vcSync;
+syncCapture.v_dac = channelData{syncCfg.idxVdac} / syncCfg.probeVoltsPerUnit(syncCfg.idxVdac);
+syncCapture.Mp_AC = Mp_AC_init;
+syncCapture.phi_AC = phi_AC_init;
+
+fcn_reuse_figure('Alignment of v_c and v_s'); % one window, updated at each call
 
 subplot(2, 1, 1);
 plot(tSyncMs, vcSync, tSyncMs, vsSync);

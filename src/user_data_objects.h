@@ -50,6 +50,7 @@
 #define ID_MEAS_MODE   0x57
 #define ID_MEAS_POWERP 0x58
 #define ID_MEAS_POWERQ 0x59
+#define ID_MEAS_SCOPE_STATE 0x5A
 
 /* "Config" group ID (child of root) and its one writable item's ID. */
 #define ID_CONFIG              0x6
@@ -59,6 +60,8 @@
 #define ID_CONFIG_MODE 0x63
 #define ID_CONFIG_MPAC 0x64
 #define ID_CONFIG_PHIAC 0x65
+#define ID_CONFIG_SCOPE_ARM 0x66
+#define ID_CONFIG_SCOPE_DUMP 0x67
 
 /* Subset bitmask: marks which items get included when a client asks for
  * a named subset of the tree (e.g. periodic reporting). Only one subset
@@ -101,6 +104,16 @@ static float32_t phi_m = 0.0F;
 static float32_t Mp_AC_source = 0.0F;
 static float32_t phi_AC_source = 0.0F;
 static uint8_t mode_asked = IDLEMODE;
+
+/* ScopeMimicry control over the ThingSet shell. The captured data are
+ * dumped on the console port (printk), not on the ThingSet port.
+ * scope_state: 0 = waiting for trigger, 1 = recording, 2 = capture complete.
+ * Writing 1 to scope_arm_asked re-arms and triggers a new capture; writing 1
+ * to scope_dump_asked dumps the captured buffer. Both are cleared by main.cpp
+ * once handled. */
+static uint8_t scope_state = 0;
+static uint8_t scope_arm_asked = 0;
+static uint8_t scope_dump_asked = 0;
 
 /* Register the "Measurements" group as a child of the root (ID_ROOT),
  * with its own ID (ID_MEAS) and display name. THINGSET_NO_CALLBACK means
@@ -145,6 +158,9 @@ THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_POWERP, "rPowerP_W", &power_d, 2,
 /* Reactive power, in VAr. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_POWERQ, "rPowerQ_VAr", &power_q, 2,
                         THINGSET_ANY_R, SUBSET_SER);
+/* ScopeMimicry state: 0 = waiting for trigger, 1 = recording, 2 = capture complete. */
+THINGSET_ADD_ITEM_UINT8(ID_MEAS, ID_MEAS_SCOPE_STATE, "rScopeState", &scope_state,
+                        THINGSET_ANY_R, SUBSET_SER);
 
 /* Register the "Config" group as a child of the root. */
 THINGSET_ADD_GROUP(ID_ROOT, ID_CONFIG, "Config", THINGSET_NO_CALLBACK);
@@ -171,3 +187,11 @@ THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_MPAC, "wMpAC",
 
 THINGSET_ADD_ITEM_FLOAT(ID_CONFIG, ID_CONFIG_PHIAC, "wphi_AC",
                         &phi_AC_source, 2, THINGSET_ANY_RW, SUBSET_SER);
+
+/* Write 1 to re-arm and trigger a new ScopeMimicry capture. */
+THINGSET_ADD_ITEM_UINT8(ID_CONFIG, ID_CONFIG_SCOPE_ARM, "wScopeArm",
+                        &scope_arm_asked, THINGSET_ANY_RW, SUBSET_SER);
+
+/* Write 1 to dump the captured ScopeMimicry buffer on the console port. */
+THINGSET_ADD_ITEM_UINT8(ID_CONFIG, ID_CONFIG_SCOPE_DUMP, "wScopeDump",
+                        &scope_dump_asked, THINGSET_ANY_RW, SUBSET_SER);

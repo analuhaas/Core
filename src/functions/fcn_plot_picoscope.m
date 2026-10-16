@@ -3,8 +3,7 @@ function figureHandle = fcn_plot_picoscope(channelData, numSamples, timeInterval
 
 numScopes = numel(channelData);
 
-figureHandle = figure('Name', 'PicoScope 4000 Series (A API) - Multi-scope Block Capture', ...
-    'NumberTitle', 'off');
+figureHandle = fcn_reuse_figure('PicoScope 4000 Series (A API) - Multi-scope Block Capture'); % one window, updated at each call
 
 for s = 1:numScopes
 
