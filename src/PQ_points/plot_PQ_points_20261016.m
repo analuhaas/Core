@@ -160,8 +160,20 @@ load(fullfile(dataFolder, tempMonitorFile));
 
 figure(30), box on, grid on, hold on
 
-plot(tempMonitorTime_s./60,tempMonitorTemp2,'-o','LineWidth',1);
-plot(tempMonitorTime_s./60,tempMonitorTemp1,'-o','LineWidth',1);
+for i= 1:1:length(tempMonitorTemp2)
+    if isnan(tempMonitorTemp1(i))
+        tempMonitorBurst1_i = tempMonitorBurst1(i,:);
+        tempMonitorBurst1_i(isnan(tempMonitorBurst1_i)) = [];
+        tempMonitorTemp1(i) = mean(tempMonitorBurst1_i);
+    end
+    if isnan(tempMonitorTemp2(i))
+        tempMonitorBurst2_i = tempMonitorBurst2(i,:);
+        tempMonitorBurst2_i(isnan(tempMonitorBurst2_i)) = [];
+        tempMonitorTemp2(i) = mean(tempMonitorBurst2_i);
+    end
+end
+plot(tempMonitorTime_s./60,tempMonitorTemp2,'-o','MarkerSize',5,'LineWidth',1);
+    plot(tempMonitorTime_s./60,tempMonitorTemp1,'-o','MarkerSize',5,'LineWidth',1);
 if exist('tempAmbient', 'var') % ambient reading when u_dc was turned on, before the monitoring
     ax = gca; ax.ColorOrderIndex = 1; % same colors as Temp2 / Temp1
     plot(tempAmbientTime_s/60,tempAmbient.Temp2,'p','MarkerSize',5,'LineWidth',1);
@@ -169,12 +181,13 @@ if exist('tempAmbient', 'var') % ambient reading when u_dc was turned on, before
     legend('$T_{Q1,case}$','$T_{Q1,drain}$','$T_{Q1,case}$ ambient','$T_{Q1,drain}$ ambient', ...
         'Interpreter','latex','Location','best'), legend boxon % R2018b and later
 else
-    legend('$T_{Q1,case}$','$T_{Q1,drain}$','Interpreter','latex','Location','best'), legend boxon % R2018b and later
+    legend('$T_{Q1,case}$','$T_{Q1,drain}$','Interpreter','latex','Location','southeast'), legend boxon % R2018b and later
 end
 
 ylabel('$T$ [$^o$C]','Interpreter','latex')
 xlabel('$time$ [min]','Interpreter','latex')
-title(sprintf('Mean of %d readings %.1f s apart, every %.0f s', ...
+xlim([-20,60]);
+title(sprintf('Temperature monitoring: mean of %d readings %.1f s apart, every %.0f s', ...
     tempBurstCount, tempBurstSpacing_s, tempMonitorPeriod_s),'Interpreter','latex')
 
 %% Histograms of the temperature series (temperature test)
@@ -212,10 +225,10 @@ if saveFigures
     figure_PP(1,fullfile(figuresFolder,'PQ_diagram_PicoScope_ScopeMimicry.png'),'width',8.75,'height',6) % Export to .png
 
     for k = 1:numPoints
-        figure_PP(10 + k,fullfile(figuresFolder,sprintf('point%d_curves_PicoScope.png',k)),'width',8.75,'height',6) % Export to .png
-        figure_PP(20 + k,fullfile(figuresFolder,sprintf('point%d_curves_ScopeMimicry.png',k)),'width',8.75,'height',6) % Export to .png
+        figure_PP(10 + k,fullfile(figuresFolder,sprintf('point%d_curves_PicoScope.png',k)),'width',13.125,'height',9) % Export to .png
+        figure_PP(20 + k,fullfile(figuresFolder,sprintf('point%d_curves_ScopeMimicry.png',k)),'width',13.125,'height',9) % Export to .png
     end
 
-    figure_PP(30,fullfile(figuresFolder,'temperature_monitoring.png'),'width',8.75,'height',6) % Export to .png
-    figure_PP(31,fullfile(figuresFolder,'temperature_series_histograms.png'),'width',8.75,'height',6) % Export to .png
+    figure_PP(30,fullfile(figuresFolder,'temperature_monitoring.png'),'width',13.125,'height',9) % Export to .png
+    figure_PP(31,fullfile(figuresFolder,'temperature_series_histograms.png'),'width',13.125,'height',9) % Export to .png
 end
