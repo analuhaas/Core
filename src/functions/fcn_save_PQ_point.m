@@ -1,4 +1,4 @@
-function [Pfft, Qfft, Pdc, eta, fileName] = fcn_save_PQ_point(channelData, chIdx, boardMeas, Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching, scopeMimicry)
+function [Pfft, Qfft, Pdc, eta, fileName] = fcn_save_PQ_point(channelData, chIdx, boardMeas, Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching, scopeMimicry, stage, extraVars)
 %FCN_SAVE_PQ_POINT calculates the active and reactive power (FFT method) and
 %the DC-side power of the measured PQ point and saves it, one file per
 %point named by date and time
@@ -10,6 +10,10 @@ function [Pfft, Qfft, Pdc, eta, fileName] = fcn_save_PQ_point(channelData, chIdx
 %   scopeMimicry (optional): board ScopeMimicry capture from
 %   fcn_scope_mimicry_acquisition, saved in the same file as one variable
 %   per channel, prefixed "sm_" (e.g. sm_Vgrid), with its time vector t_sm
+%   stage (optional): text added at the end of the file name and saved as
+%   the variable stage, e.g. "before_vcreg" / "after_vcreg"
+%   extraVars (optional): struct whose fields are saved as variables in the
+%   same file (e.g. the v_c regulation reference and history)
 
 % PicoScope 1 (KP306/0011)
 i_c_pos = channelData{1}{chIdx.Icpos}; % [A] AC current, positive conductor
@@ -47,16 +51,29 @@ T_j_temp2 = boardMeas.Temp2; % [degC] MOSFET temperature, board Temp2
 t_scope1 = (0:numel(v_c) - 1).' * double(timeIntervalNanoSeconds{1}) * 1e-9; % [s] time vector of the PicoScope 1 curves
 t_scope2 = (0:numel(u_dc) - 1).' * double(timeIntervalNanoSeconds{2}) * 1e-9; % [s] time vector of the PicoScope 2 curves
 
-% File name: date and time, then the converter operating point (e.g. PQpoint_20261016_143012_Mp0.5345_phim+0.1500.mat)
-fileName = sprintf('PQpoint_%s_Mp%.4f_phim%+.4f.mat', char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')), Mp, phi_m);
+% File name: date and time, the converter operating point and the stage if given
+% (e.g. PQpoint_20261016_143012_Mp0.5345_phim+0.1500_after_vcreg.mat)
+if nargin < 13
+    stage = "";
+end
+fileName = sprintf('PQpoint_%s_Mp%.4f_phim%+.4f', char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')), Mp, phi_m);
+if strlength(stage) > 0
+    fileName = sprintf('%s_%s', fileName, stage);
+end
+fileName = [fileName '.mat'];
 save(fileName, ...
-    'Pfft', 'Qfft', 'Pdc', 'eta', 'Mp_AC', 'phi_AC', 'Mp', 'phi_m', ...
+    'Pfft', 'Qfft', 'Pdc', 'eta', 'Mp_AC', 'phi_AC', 'Mp', 'phi_m', 'stage', ...
     'Icpos_rms', 'Icneg_rms', 'Vs_rms', 'Vc_rms', 'Udc_mean', 'Idc_mean', 'T_j_temp1', 'T_j_temp2', ...
     't_scope1', 'i_c_pos', 'v_dac', 'v_s', 'v_c', ...
     't_scope2', 'u_dc', 'i_dc', 'i_c_neg', 'v_s_2');
 
+% Extra variables (e.g. v_c regulation reference and history)
+if nargin >= 14 && ~isempty(extraVars)
+    save(fileName, '-struct', 'extraVars', '-append');
+end
+
 % ScopeMimicry: one variable per channel (sm_<channel name>) + time vector
-if nargin >= 12
+if nargin >= 12 && ~isempty(scopeMimicry)
     sm = struct();
     sm.t_sm = scopeMimicry.t; % [s] ScopeMimicry time vector
     smNames = setdiff(fieldnames(scopeMimicry), {'t'}, 'stable');

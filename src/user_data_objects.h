@@ -40,17 +40,14 @@
  * parent, but groups and items can reuse numbers across different
  * parents. */
 #define ID_MEAS        0x5
-#define ID_MEAS_V_HIGH_RIPPLE 0x50
-#define ID_MEAS_V_HIGH 0x51
-#define ID_MEAS_I1_LOW 0x52
-#define ID_MEAS_I2_LOW 0x53
-#define ID_MEAS_I_HIGH 0x54
-#define ID_MEAS_TEMP1  0x55
-#define ID_MEAS_TEMP2  0x56
-#define ID_MEAS_MODE   0x57
-#define ID_MEAS_POWERP 0x58
-#define ID_MEAS_POWERQ 0x59
-#define ID_MEAS_SCOPE_STATE 0x5A
+#define ID_MEAS_V_HIGH 0x50
+#define ID_MEAS_I_HIGH 0x51
+#define ID_MEAS_TEMP1  0x52
+#define ID_MEAS_TEMP2  0x53
+#define ID_MEAS_MODE   0x54
+#define ID_MEAS_POWERP 0x55
+#define ID_MEAS_POWERQ 0x56
+#define ID_MEAS_SCOPE_STATE 0x57
 
 /* "Config" group ID (child of root) and its one writable item's ID. */
 #define ID_CONFIG              0x6
@@ -71,9 +68,6 @@
 /* Backing storage for the "Measurements" group. ThingSet items only ever
  * store a pointer to these variables, so main.cpp updates them directly
  * (e.g. from sensor readings) and the new value is what GET returns. */
-static float32_t I1_rms_peak;
-static float32_t I2_rms_peak;
-static float32_t Vhigh_ripple_pp;
 static float32_t I_high_value;
 static float32_t V_high_value;
 static float32_t temp_1_value;
@@ -128,17 +122,8 @@ THINGSET_ADD_GROUP(ID_ROOT, ID_MEAS, "Measurements", THINGSET_NO_CALLBACK);
  * from any authentication level (there's no write access here). */
 
 
-/* Low-side voltage on leg 2, in volts. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V_HIGH_RIPPLE, "rVhighripple_V", &Vhigh_ripple_pp, 2,
-                        THINGSET_ANY_R, SUBSET_SER);
 /* High-side (bus) voltage, in volts. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_V_HIGH, "rVHigh_V", &V_high_value, 2,
-                        THINGSET_ANY_R, SUBSET_SER);
-/* Low-side current on leg 1, in amps. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I1_LOW, "rI1rms_A", &I1_rms_peak, 2,
-                        THINGSET_ANY_R, SUBSET_SER);
-/* Low-side current on leg 2, in amps. */
-THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I2_LOW, "rI2rms_A", &I2_rms_peak, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* High-side (bus) current, in amps. */
 THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_I_HIGH, "rIHigh_A", &I_high_value, 2,
