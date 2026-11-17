@@ -1,4 +1,4 @@
-function [scopeMimicry, scopeNames, scopeData] = fcn_scope_mimicry_acquisition(ts, con, scopeTs, timeout_s)
+function [scopeMimicry, scopeNames, scopeData] = fcn_scope_mimicry_acquisition(ts, con, scopeTs, timeout_s, arm)
 %FCN_SCOPE_MIMICRY_ACQUISITION captures and retrieves the board's ScopeMimicry buffer
 %   The capture is armed and the dump is asked over ThingSet (Config/wScopeArm,
 %   Config/wScopeDump), and the data are read on the board's console port,
@@ -14,13 +14,22 @@ function [scopeMimicry, scopeNames, scopeData] = fcn_scope_mimicry_acquisition(t
 %   con: serialport object of the console port (the other port of the board)
 %   scopeTs: [s] ScopeMimicry sample time (control task period)
 %   timeout_s: [s] max time to wait for the capture and for the dump
+%   arm (optional, default true): false = don't arm a new capture, only wait
+%   for the capture already armed by the board (e.g. at the start of the v_c
+%   regulation) and dump it
 %
 %   scopeMimicry: struct with the time vector t [s] and one field per channel
 %   scopeNames: channel names, scopeData: samples x channels (oldest first)
 
+if nargin < 5
+    arm = true;
+end
+
 % Arm and trigger a new capture, then wait until it is complete
 flush(con);
-ts.write("Config", struct("wScopeArm", 1));
+if arm
+    ts.write("Config", struct("wScopeArm", 1));
+end
 t0 = tic;
 while true
     scopeState = ts.read("Measurements/rScopeState");

@@ -48,6 +48,10 @@
 #define ID_MEAS_POWERP 0x55
 #define ID_MEAS_POWERQ 0x56
 #define ID_MEAS_SCOPE_STATE 0x57
+#define ID_MEAS_MP     0x58
+#define ID_MEAS_PHIM   0x59
+#define ID_MEAS_MPAC   0x5A
+#define ID_MEAS_PHIAC  0x5B
 
 /* "Config" group ID (child of root) and its one writable item's ID. */
 #define ID_CONFIG              0x6
@@ -83,7 +87,8 @@ enum ConverterState : uint8_t /* Holds the current state of the inverter */
 {
     IDLEMODE = 0,  /* Idle mode: stops the converter power */
     POWERMODE = 1, /* Power mode: drives the H-bridge with sine PWM */
-    ERRORMODE = 3  /* Error mode: indicates an error condition */
+    ERRORMODE = 3,  /* Error mode: indicates an error condition */
+    VCREGMODE = 4, /* Vc regulation mode: regulates the converter AC voltage */
 };
 /* Variable that main.cpp uses to set in which mode the converter is
  * (IDLE, POWER, ERROR) */
@@ -145,6 +150,20 @@ THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_POWERQ, "rPowerQ_VAr", &power_q, 2,
                         THINGSET_ANY_R, SUBSET_SER);
 /* ScopeMimicry state: 0 = waiting for trigger, 1 = recording, 2 = capture complete. */
 THINGSET_ADD_ITEM_UINT8(ID_MEAS, ID_MEAS_SCOPE_STATE, "rScopeState", &scope_state,
+                        THINGSET_ANY_R, SUBSET_SER);
+/* Operating point applied by the board (same variables as Config/wMp, wphi_m,
+ * wMpAC, wphi_AC, which the v_c regulation also writes), with 4 decimals. */
+/* Modulation amplitude of the converter, in pu. */
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_MP, "rMp_pu", &Mp, 4,
+                        THINGSET_ANY_R, SUBSET_SER);
+/* Modulation phase of the converter, in rad. */
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_PHIM, "rPhiM_rad", &phi_m, 4,
+                        THINGSET_ANY_R, SUBSET_SER);
+/* Modulation amplitude of the AC source, in pu. */
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_MPAC, "rMpAC_pu", &Mp_AC_source, 4,
+                        THINGSET_ANY_R, SUBSET_SER);
+/* Modulation phase of the AC source, in rad. */
+THINGSET_ADD_ITEM_FLOAT(ID_MEAS, ID_MEAS_PHIAC, "rPhiAC_rad", &phi_AC_source, 4,
                         THINGSET_ANY_R, SUBSET_SER);
 
 /* Register the "Config" group as a child of the root. */

@@ -28,11 +28,11 @@ plot(tMs, scopeMimicry.I2_low_value);
 ylabel('Current (A)');
 legend('I1\_low \leftrightarrow i_{c,pos}', 'I2\_low \leftrightarrow i_{c,neg}', 'Location', 'eastoutside');
 
-% Internal oscillator driving the DAC (unitless, same phase as v_dac)
+% Teaching sine: voltage reference v_ref followed by the v_c regulation
 subplot(numRows, 1, 3), hold on, grid on, box on
 plot(tMs, scopeMimicry.sine);
-ylabel('sine (-)');
-legend('sine \leftrightarrow v_{DAC}', 'Location', 'eastoutside');
+ylabel('Voltage (V)');
+legend('sine = v_{ref}', 'Location', 'eastoutside');
 
 % DC side
 subplot(numRows, 1, 4), hold on, grid on, box on

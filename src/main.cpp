@@ -73,6 +73,8 @@ void start_pwm_outputs();
 void stop_pwm_outputs();
 /* Advances the local oscillator and updates the sine voltage reference */
 void update_teaching_sine();
+void update_AC_source_sine();
+void update_modulation_sine();
 /* Applies clamped complementary duty cycles to the H-bridge legs */
 void apply_complementary_duty(float32_t duty);
 /* Streams a completed ScopeMimicry capture over the serial console */
@@ -87,14 +89,8 @@ void read_measurements();
 bool overcurrent_detected();
 /* Calculate the active and reactive power on the AC side */
 void calculate_power();
-/* Accumulates squared currents and refreshes the RMS values once per grid period */
-void update_rms();
-/* Tracks the peak current over a grid period and derives RMS as peak/sqrt(2) */
-void update_rms_peak();
-/* Tracks an EMA/IIR estimate of the mean-square current and derives RMS continuously */
-void update_rms_ema();
-/* Tracks V_high min/max/mean and refreshes the bus voltage ripple once per grid period */
-void update_voltage_ripple();
+
+void regulate_vc_to_vref();
 
 /*--------------USER VARIABLES DECLARATIONS------------------- */
 
@@ -122,6 +118,8 @@ static constexpr float32_t RMS_EMA_TAU = 0.02F;
 static constexpr float32_t RMS_EMA_ALPHA = TS / RMS_EMA_TAU;
 /* Size of the scope buffer for data recording */
 static constexpr uint32_t SCOPE_BUFFER_SIZE = 1024;
+/* One scope sample every SCOPE_DECIMATION control steps (sample time = SCOPE_DECIMATION * TS) */
+static constexpr uint32_t SCOPE_DECIMATION = 2;
 /* Number of channels recorded in the scope for diagnostics */
 static constexpr uint8_t SCOPE_CHANNEL_COUNT = 15;
 
@@ -169,11 +167,22 @@ static float32_t Vhigh_max_running = -FLT_MAX;
 static float32_t Vhigh_sum;
 
 /* [V] Amplitude of the local teaching sine wave */
+static float32_t V_ref = 12*sqrtf(2.0F);
+/* [V] Instantaneous v_c regulation error, sine - Vgrid_meas */
+static float32_t vc_error;
+/* [V] Peak amplitude of the v_c phasor, from regulate_vc_to_vref() (once per grid period) */
+static float32_t Vc_amplitude;
+/* [V] Amplitude error V_ref - |V_c|, from regulate_vc_to_vref() (once per grid period) */
+static float32_t vc_amplitude_error;
+/* [rad] Phase error of v_c relative to the teaching sine, > 0 : v_c leads (once per grid period) */
+static float32_t vc_phase_error;
 // static float32_t Mp_AC_source = 0.0F;
 /* [V] Amplitude of the local teaching sine wave */
 // static float32_t Mp = 0.0F;
 /* [rad] Phase angle of the local teaching sine wave */
 // static float32_t phi_AC_source;
+static float32_t phi_sine_modulo;
+/* [rad] Phase angle of the AC source control sine wave */
 static float32_t phi_AC_source_modulo;
 static float32_t phi_AC_source_old;
 static float32_t delta_phi_AC_source;
@@ -184,6 +193,8 @@ static float32_t phi_m_old;
 static float32_t delta_phi_m;
 /* [No unit] Instantaneous value of the local teaching sine wave */
 static float32_t sine;
+/* [No unit] Instantaneous value of the AC source control sine wave */
+static float32_t sine_ACsource;
 /* [No unit] Instantaneous value of the reference duty cycle sine wave */
 static float32_t sine_modulation;
 /* [V] Instantaneous local grid voltage from the teaching sine */
@@ -292,17 +303,105 @@ void stop_pwm_outputs()
  */
 void update_teaching_sine()
 {
+    phi_sine_modulo = ot_modulo_2pi(phi_sine_modulo + W0 * TS);
+    sine = V_ref * ot_sin(phi_sine_modulo); // reference sine to follow in voltage
+}
+
+/**
+ * @brief Updates the AC source control sine wave.
+ */
+void update_AC_source_sine()
+{   
     delta_phi_AC_source = phi_AC_source - phi_AC_source_old;
     phi_AC_source_modulo = ot_modulo_2pi(phi_AC_source_modulo + delta_phi_AC_source + W0 * TS);
+    sine_ACsource = ot_sin(phi_AC_source_modulo);
 
+    dac_value = (0.52F + ( Mp_AC_source * sine_ACsource / 2.0F )) * 4000;
+    phi_AC_source_old = phi_AC_source;
+}
+
+/**
+ * @brief Updates the modulation control sine wave.
+ */
+void update_modulation_sine()
+{   
     delta_phi_m = phi_m - phi_m_old;
     phi_m_modulo = ot_modulo_2pi(phi_m_modulo + delta_phi_m + W0 * TS);
-    sine = ot_sin(phi_AC_source_modulo);
     sine_modulation = ot_sin(phi_m_modulo);
+
     delta_duty_cycle = 0.5F + ( Mp * sine_modulation / 2.0F );
-    dac_value = (0.52F + ( Mp_AC_source * sine / 2.0F )) * 4000;
-    phi_AC_source_old = phi_AC_source;
     phi_m_old = phi_m;
+}
+
+/**
+ * @brief regulates vc voltage to the reference voltage, acting on Mp and phi_m.
+ *
+ * The phasor of Vgrid_meas in the frame of the teaching sine is built from a
+ * window of one grid period, so Mp and phi_m are corrected once every
+ * 20 ms. Needs the switch OPEN: with the switch closed, v_c is imposed by the AC
+ * source, Mp can't remove the error and it would ramp up to its limit.
+ */
+void regulate_vc_to_vref()
+{
+    /* Leave false while the supervisor writes Mp, and never true together with
+     * the one of regulate_vs_to_vref (both use Vgrid_meas) */
+    static constexpr bool REGULATION_ENABLED = true;
+    /* [No unit] Fraction of the error corrected per grid period */
+    static constexpr float32_t ALPHA = 1.0F;
+    /* [No unit] Fraction of the error corrected per grid period */
+    static constexpr float32_t BETHA = 1.0F;
+    /* [V] Peak voltage below which the measured phase is not trusted */
+    static constexpr float32_t V_MIN = 2.0F * SQRT2;
+    /* Modulation limit */
+    static constexpr float32_t M_MAX = 0.9F;
+    /* Max change of Mp per grid period */
+    static constexpr float32_t MAX_STEP_M = 0.1F;
+    /* [rad] Max change of phi_m per grid period */
+    static constexpr float32_t MAX_STEP_PHI = 0.05F;
+
+    static float32_t sum_sin;
+    static float32_t sum_cos;
+    static uint32_t window_samples;
+
+    if (!REGULATION_ENABLED || mode != VCREGMODE) {
+        sum_sin = 0.0F;
+        sum_cos = 0.0F;
+        window_samples = 0;
+        return;
+    }
+
+    /* Called before update_teaching_sine(): phi_sine_modulo is still the phase of the
+     * control step in which Vgrid_meas was read */
+    sum_sin += Vgrid_meas * ot_sin(phi_sine_modulo);
+    sum_cos += Vgrid_meas * ot_cos(phi_sine_modulo);
+    window_samples++;
+    if (window_samples < RMS_WINDOW_SAMPLES) {
+        return;
+    }
+
+    /* For Vgrid_meas = V * sin(phi_sine_modulo + phi): sum_sin -> V * cos(phi) * N / 2 and
+     * sum_cos -> V * sin(phi) * N / 2 */
+    const float32_t V_re = 2.0F * sum_sin / RMS_WINDOW_SAMPLES;
+    const float32_t V_im = 2.0F * sum_cos / RMS_WINDOW_SAMPLES;
+    const float32_t V_c = sqrtf(V_re * V_re + V_im * V_im);
+    sum_sin = 0.0F;
+    sum_cos = 0.0F;
+    window_samples = 0;
+
+    /* v_c peak is Mp * Vdc on an H-bridge, so the amplitude error is scaled by Vdc */
+    const float32_t E_M = V_ref - V_c;
+    const float32_t step_M = saturate(ALPHA * E_M / control_bus_voltage(), -MAX_STEP_M, MAX_STEP_M);
+    Mp = saturate(Mp + step_M, 0, M_MAX);
+    Vc_amplitude = V_c;
+    vc_amplitude_error = E_M;
+
+    if (V_c > V_MIN) {
+        /* > 0 : v_c leads the reference, so the modulation phase has to go back */
+        const float32_t E_phi = atan2f(V_im, V_re);
+        const float32_t step_phi = saturate(BETHA * E_phi, -MAX_STEP_PHI, MAX_STEP_PHI);
+        phi_m = phi_m - step_phi;
+        vc_phase_error = E_phi;
+    }
 }
 
 /**
@@ -377,12 +476,15 @@ void setup_scope()
     scope.connectChannel(V_high_filt, "Vdc");
     scope.connectChannel(power_d, "P_board");   /* active power from calculate_power() [W] */
     scope.connectChannel(power_q, "Q_board");   /* reactive power from calculate_power() [VAr] */
-    scope.connectChannel(sine, "sine");
-    scope.connectChannel(sine_modulation, "sine_modulation");
+    scope.connectChannel(sine, "sine");                       /* v_ref [V] */
     scope.connectChannel(delta_duty_cycle, "duty_cycle");
-    scope.connectChannel(duty_cycle_1, "duty_cycle_1");
-    scope.connectChannel(duty_cycle_2, "duty_cycle_2");
-    scope.connectChannel(state_mode_scope, "state");
+    /* v_c regulation. The 15 channels x 1024 samples are allocated on the heap,
+     * which has no room for more channels: these replace duty_cycle_1/2,
+     * sine_modulation and state */
+    scope.connectChannel(vc_error, "vc_error");               /* v_ref - v_c [V] */
+    scope.connectChannel(Vc_amplitude, "Vc_amplitude");       /* |V_c| peak [V] */
+    scope.connectChannel(vc_amplitude_error, "E_M");          /* V_ref - |V_c| [V] */
+    scope.connectChannel(vc_phase_error, "E_phi");            /* phase of v_c - phase of v_ref [rad] */
     scope.connectChannel(I_high_value, "idc");
     scope.connectChannel(temp_1_value, "T1");
     scope.connectChannel(temp_2_value, "T2");
@@ -419,9 +521,6 @@ void read_measurements()
 
     V_high_filt = vHighFilter.calculateWithReturn(V_high_value);
     Vgrid_meas = V1_low_value - V2_low_value;
-
-    I1_low_value = I1_low_value -0.1;
-    I2_low_value = I2_low_value -0.15;
 }
 
 /**
@@ -534,6 +633,13 @@ void loop_communication_task()
                 critical_task_counter = 0;
             }
             break;
+        case 'g':
+            if (!is_downloading) {
+                scope.start();
+                mode_asked = VCREGMODE;
+                critical_task_counter = 0;
+            }
+            break;
         case 'u':
             adjust_phase_converter(0.01F);
             break;
@@ -592,9 +698,22 @@ void loop_application_task()
             mode = POWERMODE;
             critical_task_counter = 0;
         }
+        if (mode_asked == VCREGMODE) {
+            mode = VCREGMODE;
+            critical_task_counter = 0;
+            /* Capture the start of the v_c regulation (armed and triggered by the
+             * critical task, same as Config/wScopeArm) */
+            scope_arm_asked = 1;
+        }
         // spin.led.turnOn();
         break;
     case POWERMODE:
+        if (mode_asked == IDLEMODE) {
+            mode = IDLEMODE;
+        }
+        // spin.led.toggle();
+        break;
+    case VCREGMODE:
         if (mode_asked == IDLEMODE) {
             mode = IDLEMODE;
         }
@@ -622,25 +741,6 @@ void loop_application_task()
     if (is_downloading) {
         dump_scope_datas(scope);
         is_downloading = false;
-    } else {
-        /*
-        printk("%.3f:", (double)V_high_filt);
-        printk("%.3f:", (double)temp_1_value);
-        printk("%.3f\n", (double)temp_2_value);
-        */
-        /*
-        printk("state %d:Vdc %.3f:Mp %.2f:Mp_src %.2f:phi_m %.2f:phi_src %.2f:d1 %.3f:d2 %.3f:T1 %.3f:T2 %.3f\n",
-            mode,
-            static_cast<double>(V_high_filt),
-            static_cast<double>(Mp),
-            static_cast<double>(Mp_AC_source),
-            static_cast<double>(phi_m),
-            static_cast<double>(phi_AC_source),
-            static_cast<double>(duty_cycle_1),
-            static_cast<double>(duty_cycle_2),
-            static_cast<double>(temp_1_value),
-            static_cast<double>(temp_2_value));
-        */
     }
 
     /* blink_period_s is writable over the ThingSet shell (Config/wBlinkPeriod_s) */
@@ -653,12 +753,7 @@ void loop_application_task()
 void loop_critical_task()
 {
     critical_task_counter++;
-    update_teaching_sine();
-    read_measurements();
-    calculate_power();
     
-
-    // dac_value = delta_duty_cycle * 4000;
     spin.dac.setConstValue(2, 1, dac_value);
 
     if (overcurrent_detected()) {
@@ -666,6 +761,24 @@ void loop_critical_task()
     }
 
     if (mode == POWERMODE) {
+        update_teaching_sine();
+        update_AC_source_sine();
+        update_modulation_sine();
+        apply_complementary_duty(delta_duty_cycle);
+        start_pwm_outputs();
+
+        if (critical_task_counter > 20 && overcurrent_detected()) {
+            mode = ERRORMODE;
+        }
+        if (critical_task_counter > 1000 && overcurrent_detected_operation()) {
+            mode = ERRORMODE;
+            trigger = true;
+        }
+    } else if (mode == VCREGMODE) {
+        regulate_vc_to_vref();
+        update_teaching_sine();
+        update_AC_source_sine();
+        update_modulation_sine();
         apply_complementary_duty(delta_duty_cycle);
         start_pwm_outputs();
 
@@ -682,6 +795,11 @@ void loop_critical_task()
         // spin.led.turnOff();
     }
 
+    read_measurements();
+    calculate_power();
+    /* sine and the Vgrid_meas just read belong to the same control step */
+    vc_error = sine - Vgrid_meas;
+
     state_mode_scope = static_cast<float32_t>(mode);
 
     /* Re-arm and trigger a new capture when asked over ThingSet (Config/wScopeArm).
@@ -692,7 +810,9 @@ void loop_critical_task()
         scope.start();
         trigger = true;
     }
-    scope_state = static_cast<uint8_t>(scope.acquire());
+    if (critical_task_counter % SCOPE_DECIMATION == 0) {
+        scope_state = static_cast<uint8_t>(scope.acquire());
+    }
 }
 
 /**

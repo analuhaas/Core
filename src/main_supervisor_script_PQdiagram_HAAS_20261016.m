@@ -23,7 +23,7 @@ syncVmin       = 2;              % [V rms] below this, gain and phase are not tr
 syncVmax       = 15;             % [V rms] abort if either voltage exceeds this
 syncMmax       = 0.95;           % Mp_AC above ~0.96 clips the DAC (0.52 offset)
 syncMaxIter    = 30;
-syncSettle_s   = 0.3;            % wait after writing before capturing
+settle_s   = 0.3;            % wait after writing before capturing
 maxCurrentClosingA = 0.1;
 
 %  V_c regulation parameters (keeps v_c amplitude and phase fixed when current flows)
@@ -33,7 +33,6 @@ vcRegAlpha      = 1.0;            % fraction of the remaining error corrected pe
 vcRegMaxStepM   = 0.5;           % max change of Mp_AC per iteration
 vcRegMaxStepPhi = 0.5;            % [rad] max change of phi_AC per iteration
 vcRegMaxIter    = 300;
-vcRegSettle_s   = 0.1;            % wait after writing before capturing
 
 %  Ramp parameters of the converter operating point (Mp, phi_m)
 rampMaxStepM    = 0.001;          % max change of Mp per step
@@ -145,17 +144,6 @@ idxUdc = 1;
 idxIdc = 2;
 idxIcneg = 3;
 idxVs2 = 4;
-
-% Channel indices used by fcn_save_PQ_point (PicoScope 1 / PicoScope 2)
-chIdx.Icpos = idxIcpos;
-chIdx.Vdac = idxVdac;
-chIdx.Vs = idxVs;
-chIdx.Vc = idxVc;
-chIdx.Udc = idxUdc;
-chIdx.Idc = idxIdc;
-chIdx.Icneg = idxIcneg;
-chIdx.Vs2 = idxVs2;
-
 %% Configuring Thingset communication with TWIST/SPIN board
 
 input(sprintf('Startup converter: check if software limit (MAX_CURRENT in main.cpp) is at %g A, press enter to continue... ', converterSoftwareLimitA), 's');
@@ -179,10 +167,8 @@ for name = ts.fetchChildren(MEAS)
 end
 
 %% Opening the console port of the TWIST/SPIN board (ScopeMimicry dump)
-% The board has two USB serial ports with the same VID: the ThingSet shell
+% The board has two USB serial ports: the ThingSet shell
 % (used by ts) and the console, where printk writes the ScopeMimicry dump.
-% Opened like ThingSetTools does, WITHOUT FlowControl: a DTR/RTS mismatch
-% resets the board into its bootloader.
 
 if consolePort == ""
     consolePort = setdiff(ThingSetTools.findPorts("2FE3", "", false), ts.Port);
@@ -238,7 +224,7 @@ picoCfg.dacSerial = dacSerial;
 picoCfg.dacChannel = idxVdac;
 picoCfg.maxExpectedDacV = maxExpectedDacV;
 
-[ps4000aDeviceObj, numChannels, channelLetters, timeIntervalNanoSeconds, probeVoltsPerUnit, probeUnit, dtScope] = ...
+[ps4000aDeviceObj, numChannels, channelLetters, timeIntervalNanoSeconds, probeVoltsPerUnit, probeUnit, Ts_Picoscope] = ...
     fcn_picoscope_setup(picoCfg, ps4000aEnuminfo);
 numScopes = numel(ps4000aDeviceObj);
 
@@ -249,16 +235,13 @@ input('Startup DC supply: turn on DC supply, press enter to continue... ', 's');
 input(sprintf('Startup AC source: check if Philibert limit is at %g A, press enter to continue... ', acSourceLimitA), 's');
 input('Startup AC source: turn on Philibert (check + validate button), press enter to continue... ', 's');
 
-%% Command converter to a certain voltage where v_s and v_c are no sync
-Mp = 0.2;
-phi_m = 0.0;
-Mp_AC = 0.4;
+%% Command converter to alignement mode, where v_s and v_c are initially at no sync
+Mp_AC = 0.0;
 phi_AC = 0.0;
-ts.write("Config", struct("wmode", 1));
-ts.write("Config", struct("wMp", Mp));
-ts.write("Config", struct("wphi_m", phi_m));
+ts.write("Config", struct("wmode", 1)); %Alignment mode
 ts.write("Config", struct("wMpAC", Mp_AC));
 ts.write("Config", struct("wphi_AC", phi_AC));
+pause(settle_s); %Allows the converter to regulate its voltage to v_ref before doing the alignement of v_s
 %% Converter and PicoScope acquisition, process data - BEFORE V_S V_C ALIGNMENT CHECKPOINT
 
 boardMeas = fcn_converter_acquisition(ts, measurements, MEAS);
@@ -271,38 +254,142 @@ fcn_plot_scope_mimicry(scopeMimicry);
 [Pfft, Qfft, Pdc] = fcn_save_PQ_point(channelData, chIdx, boardMeas, ...
     Mp, phi_m, Mp_AC, phi_AC, Ts, timeIntervalNanoSeconds, f0, f_switching, scopeMimicry);
 
-%% Synchronize vs and vc automatically (switch must be OPEN)
-% Ramps Mp (-> v_c) and Mp_AC (-> v_s) up from 0 and adjusts phi_AC until
-% both voltages reach syncVref rms and are in phase, with phi_m = 0 fixed.
-% Also gives VcClkRef phasor, the no-load reference of the v_c regulation.
 
-% Everything fcn_sync_vs_vc needs to command the converter/AC source and measure v_c, v_s
-syncCfg.ts = ts;
-syncCfg.ps4000aDeviceObj = ps4000aDeviceObj{1};
-syncCfg.numChannels = numChannels{1};
-syncCfg.probeVoltsPerUnit = probeVoltsPerUnit{1};
-syncCfg.idxVc = idxVc;
-syncCfg.idxVs = idxVs;
-syncCfg.idxVdac = idxVdac;
-syncCfg.dtScope = dtScope;
-syncCfg.f0 = f0;
-syncCfg.Vref = syncVref;
-syncCfg.TolV = syncTolV;
-syncCfg.TolPhi = syncTolPhi;
-syncCfg.Alpha = syncAlpha;
-syncCfg.MaxStepM = syncMaxStepM;
-syncCfg.MaxStepPhi = syncMaxStepPhi;
-syncCfg.Vmin = syncVmin;
-syncCfg.Vmax = syncVmax;
-syncCfg.Mmax = syncMmax;
-syncCfg.MaxIter = syncMaxIter;
-syncCfg.Settle_s = syncSettle_s;
+%% Check if phasor transformation works
+
+% Measures v_c and v_s voltages with PicoScope
+[~, ~, channelData, ~] = picoscope_acquisition(syncCfg.ps4000aDeviceObj, syncCfg.numChannels);
+v_c = channelData{idxVc} / scaleVc;
+v_s = channelData{idxVs} / scaleVs;
+time_Picoscope = Ts_Picoscope.*ones(1,length(channelData{idxVc}));
+
+% Window of time with complete fundamental frequency periods (to avoid
+% spectral leak
+Ncycles = floor((time_Picoscope(end) - time_Picoscope(1)) * f0);
+v_c = v_c(time_Picoscope<=time_Picoscope(1)+Ncycles/f0);
+v_s = v_s(time_Picoscope<=time_Picoscope(1)+Ncycles/f0);
+time_Picoscope = time_Picoscope(time_Picoscope<=time_Picoscope(1)+Ncycles/f0);
+N = length(time_Picoscope); %number of samples within complete frequency periods
+
+% Calculate phasors according to fundamental frequency
+e  = exp(-1j*2*pi*f0*(time_Picoscope));
+Vc = 2/N * sum(v_c .* e);
+Vs = 2/N * sum(v_s .* e);
+
+% Calculate errors (Vc is our reference at this stage, we want to regulate Vs to Vc)
+VcRms = abs(Vc);
+VsRms = abs(Vs);
+Error_mag = VcRms - VsRms;
+Error_phi = angle(Vs / Vc);   % phi_Vs - phi_Vc
+
+% Plot phasors
+real_part_Vc = VcRms * cos(0);
+imag_part_Vc = VcRms * sin(0);
+real_part_Vs = VsRms * cos(Error_phi);
+imag_part_Vs = VsRms * sin(Error_phi);
+
+figure(50),grid on, box on, axis equal,
+quiver(0, 0, real_part_Vc, imag_part_Vc, 0, 'LineWidth', 2, 'Color', 'r');
+quiver(0, 0, real_part_Vs, imag_part_Vs, 0, 'LineWidth', 2, 'Color', 'b');
+xlim([-1.5 1.5]);
+ylim([-1.5 1.5]);
+xlabel('Re');
+ylabel('Im');
+legend('Phasor Vc', 'Phasor Vs');
+%% Synchronize vs and vc automatically (switch must be OPEN)
+% Ramps Mp (-> v_s) up from 0 and adjusts phi_AC until
+% both voltages reach syncVref rms and are in phase.
+%
+% phi_m = 0 always.
+%
+% Attention: v_c is not regulated using MATLAB at this stage.
 
 [Mp_init, Mp_AC_init, phi_m_init, phi_AC_init, VcClkRef, syncAligned, syncCapture] = fcn_sync_vs_vc(syncCfg);
 
-% The board is now at the aligned point: keep the operating point variables
-% consistent with it (used by the next acquisitions and file names)
-Mp = Mp_init; phi_m = phi_m_init; Mp_AC = Mp_AC_init; phi_AC = phi_AC_init;
+% Initializing amplitudes and phases
+Mp_AC_init = 0.0;
+phi_AC_init = 0.0;
+syncAligned = false;
+
+for k = 1:syncMaxIter
+
+    % Sets AC source operation point
+    ts.write("Config", struct("wMpAC", Mp_AC_init));
+    ts.write("Config", struct("wphi_AC", phi_AC_init));
+    pause(settle_s); % Pause before doing a new voltage measurement
+
+    % Measures v_c and v_s voltages with PicoScope
+    [~, ~, channelData, ~] = picoscope_acquisition(syncCfg.ps4000aDeviceObj, syncCfg.numChannels);
+    v_c = channelData{idxVc} / scaleVc;
+    v_s = channelData{idxVs} / scaleVs;
+    time_Picoscope = Ts_Picoscope.*ones(1,length(channelData{idxVc}));
+
+    % Window of time with complete fundamental frequency periods (to avoid
+    % spectral leak
+    Ncycles = floor((time_Picoscope(end) - time_Picoscope(1)) * f0);
+    v_c = v_c(time_Picoscope<=time_Picoscope(1)+Ncycles/f0);
+    v_s = v_s(time_Picoscope<=time_Picoscope(1)+Ncycles/f0);
+    time_Picoscope = time_Picoscope(time_Picoscope<=time_Picoscope(1)+Ncycles/f0);
+    N = length(time_Picoscope); %number of samples within complete frequency periods
+
+    % Calculate phasors according to fundamental frequency
+    e  = exp(-1j*2*pi*f0*(time_Picoscope));
+    Vc = 2/N * sum(v_c .* e);
+    Vs = 2/N * sum(v_s .* e);
+
+    % Calculate errors (Vc is our reference at this stage, we want to regulate Vs to Vc)
+    VcRms = abs(Vc);
+    VsRms = abs(Vs);
+    Error_mag = VcRms - VsRms;
+    Error_phi = angle(Vs / Vc);   % phi_Vs - phi_Vc
+    
+    % Plot phasors
+    real_part_Vc = VcRms * cos(0);
+    imag_part_Vc = VcRms * sin(0);
+    real_part_Vs = VsRms * cos(Error_phi);
+    imag_part_Vs = VsRms * sin(Error_phi);
+    
+    figure(50),grid on, box on, axis equal,
+    quiver(0, 0, real_part_Vc, imag_part_Vc, 0, 'LineWidth', 2, 'Color', 'r');
+    quiver(0, 0, real_part_Vs, imag_part_Vs, 0, 'LineWidth', 2, 'Color', 'b');
+    xlim([-1.5 1.5]);
+    ylim([-1.5 1.5]);
+    xlabel('Re');
+    ylabel('Im');
+    legend('Phasor Vc', 'Phasor Vs');
+
+    % Verifies stop criteria according to tolerances
+    if(Error_mag <= syncTolV && Error_phi <= syncTolPhi)
+        syncAligned = true;
+        break;
+    end
+
+    % Update modulation and phase magnitudes
+    phi_AC = phi_AC + Error_phi;
+    Delta_Mp_AC = Error_mag/VcRms;
+
+    if Delta_Mp_AC > Max_delta_mod
+        Mp_AC_init = Mp_AC_init + Max_delta_mod;
+    elseif Delta_Mp_AC < -Max_delta_mod
+        Mp_AC_init = Mp_AC_init - Max_delta_mod;
+    else
+        Mp_AC_init = Mp_AC_init + Delta_Mp_AC;
+    end
+    
+end
+
+if syncAligned
+    fprintf('Sync: ALIGNED after %d iterations: Mp = %.4f, Mp_AC = %.4f, phi_AC = %.4f rad\n', ...
+        k, Mp_init, Mp_AC_init, phi_AC_init);
+else
+    warning('Sync: NOT aligned after %d iterations - do NOT close the switch.', syncCfg.MaxIter);
+end
+
+% The board is now at the aligned point
+Mp = Mp_init;
+phi_m = phi_m_init;
+Mp_AC = Mp_AC_init;
+phi_AC = phi_AC_init;
 
 if syncAligned
     input('Sync: start procedure to close the switch, press enter to continue... ', 's');
@@ -387,7 +474,7 @@ vcReg.probeVoltsPerUnit = probeVoltsPerUnit{1};
 vcReg.idxVc = idxVc;
 vcReg.idxVs = idxVs;
 vcReg.idxVdac = idxVdac;
-vcReg.dtScope = dtScope;
+vcReg.Ts_Picoscope = Ts_Picoscope;
 vcReg.f0 = f0;
 vcReg.TolV = vcRegTolV;
 vcReg.TolPhi = vcRegTolPhi;
@@ -395,7 +482,7 @@ vcReg.Alpha = vcRegAlpha;
 vcReg.MaxStepM = vcRegMaxStepM;
 vcReg.MaxStepPhi = vcRegMaxStepPhi;
 vcReg.MaxIter = vcRegMaxIter;
-vcReg.Settle_s = vcRegSettle_s;
+vcReg.Settle_s = settle_s;
 vcReg.Mmax = syncMmax;
 vcReg.Vmax = syncVmax;
 
