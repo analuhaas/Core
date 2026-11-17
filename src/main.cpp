@@ -40,6 +40,7 @@
 #include "filters.h"
 #include "transform.h"
 #include "ScopeMimicry.h"
+#include "pid.h"
 #include "zephyr/console/console.h"
 
 /* From single_phase_inverter library. */
@@ -119,7 +120,7 @@ static constexpr float32_t RMS_EMA_ALPHA = TS / RMS_EMA_TAU;
 /* Size of the scope buffer for data recording */
 static constexpr uint32_t SCOPE_BUFFER_SIZE = 1024;
 /* One scope sample every SCOPE_DECIMATION control steps (sample time = SCOPE_DECIMATION * TS) */
-static constexpr uint32_t SCOPE_DECIMATION = 2;
+static constexpr uint32_t SCOPE_DECIMATION = 4;
 /* Number of channels recorded in the scope for diagnostics */
 static constexpr uint8_t SCOPE_CHANNEL_COUNT = 15;
 
@@ -239,6 +240,36 @@ static dqo_t Idq;
 static dqo_t power;
 // static float32_t power_d;
 // static float32_t power_q;
+
+/* v_c regulation PIs, called once per grid period by regulate_vc_to_vref() */
+/* [s] Sample time of the v_c regulation (one window of one grid period) */
+static constexpr float32_t VC_REG_TS = RMS_WINDOW_SAMPLES * TS;
+/* Amplitude PI: output Mp, from V_ref and |V_c| both divided by Vdc (error in pu of Mp) */
+static constexpr float32_t kp_vc_M = 0.1F;
+/* [s] Gives an integral gain per period Kp * VC_REG_TS / Ti = 0.8 */
+static constexpr float32_t Ti_vc_M = kp_vc_M * VC_REG_TS / 0.8F;
+static constexpr float32_t Td_vc_M = 0.0F;
+static constexpr float32_t N_vc_M = 0.0F;
+static constexpr float32_t lower_bound_vc_M = 0.0F;
+/* Modulation limit */
+static constexpr float32_t upper_bound_vc_M = 0.9F;
+/* Phase PI: output phi_m [rad], from the phase error of v_c (reference 0) */
+static constexpr float32_t kp_vc_phi = 0.1F;
+/* [s] Gives an integral gain per period Kp * VC_REG_TS / Ti = 0.8 */
+static constexpr float32_t Ti_vc_phi = kp_vc_phi * VC_REG_TS / 0.8F;
+static constexpr float32_t Td_vc_phi = 0.0F;
+static constexpr float32_t N_vc_phi = 0.0F;
+static constexpr float32_t lower_bound_vc_phi = -PI;
+static constexpr float32_t upper_bound_vc_phi = PI;
+
+static PidParams pid_vc_M_params = {VC_REG_TS, kp_vc_M, Ti_vc_M, Td_vc_M, N_vc_M,
+                                    lower_bound_vc_M, upper_bound_vc_M};
+static PidParams pid_vc_phi_params = {VC_REG_TS, kp_vc_phi, Ti_vc_phi, Td_vc_phi, N_vc_phi,
+                                      lower_bound_vc_phi, upper_bound_vc_phi};
+/* PI regulating Mp so that |V_c| follows V_ref */
+static Pid pid_vc_M;
+/* PI regulating phi_m so that v_c is in phase with the teaching sine */
+static Pid pid_vc_phi;
 /*--------------------------------------------------------------- */
 
 /**********************  SUPPORT FUNCTIONS  ***************************/
@@ -346,18 +377,8 @@ void regulate_vc_to_vref()
     /* Leave false while the supervisor writes Mp, and never true together with
      * the one of regulate_vs_to_vref (both use Vgrid_meas) */
     static constexpr bool REGULATION_ENABLED = true;
-    /* [No unit] Fraction of the error corrected per grid period */
-    static constexpr float32_t ALPHA = 1.0F;
-    /* [No unit] Fraction of the error corrected per grid period */
-    static constexpr float32_t BETHA = 1.0F;
     /* [V] Peak voltage below which the measured phase is not trusted */
     static constexpr float32_t V_MIN = 2.0F * SQRT2;
-    /* Modulation limit */
-    static constexpr float32_t M_MAX = 0.9F;
-    /* Max change of Mp per grid period */
-    static constexpr float32_t MAX_STEP_M = 0.1F;
-    /* [rad] Max change of phi_m per grid period */
-    static constexpr float32_t MAX_STEP_PHI = 0.05F;
 
     static float32_t sum_sin;
     static float32_t sum_cos;
@@ -367,6 +388,9 @@ void regulate_vc_to_vref()
         sum_sin = 0.0F;
         sum_cos = 0.0F;
         window_samples = 0;
+        /* The PIs start from the Mp and phi_m in use when the regulation starts */
+        pid_vc_M.reset(Mp);
+        pid_vc_phi.reset(phi_m);
         return;
     }
 
@@ -388,18 +412,17 @@ void regulate_vc_to_vref()
     sum_cos = 0.0F;
     window_samples = 0;
 
-    /* v_c peak is Mp * Vdc on an H-bridge, so the amplitude error is scaled by Vdc */
-    const float32_t E_M = V_ref - V_c;
-    const float32_t step_M = saturate(ALPHA * E_M / control_bus_voltage(), -MAX_STEP_M, MAX_STEP_M);
-    Mp = saturate(Mp + step_M, 0, M_MAX);
+    /* v_c peak is Mp * Vdc on an H-bridge, so V_ref and V_c are divided by Vdc */
+    const float32_t vdc = control_bus_voltage();
+    Mp = pid_vc_M.calculateWithReturn(V_ref / vdc, V_c / vdc);
     Vc_amplitude = V_c;
-    vc_amplitude_error = E_M;
+    vc_amplitude_error = V_ref - V_c;
 
     if (V_c > V_MIN) {
-        /* > 0 : v_c leads the reference, so the modulation phase has to go back */
+        /* > 0 : v_c leads the reference, so the modulation phase has to go back
+         * (error of the PI = 0 - E_phi) */
         const float32_t E_phi = atan2f(V_im, V_re);
-        const float32_t step_phi = saturate(BETHA * E_phi, -MAX_STEP_PHI, MAX_STEP_PHI);
-        phi_m = phi_m - step_phi;
+        phi_m = pid_vc_phi.calculateWithReturn(0.0F, E_phi);
         vc_phase_error = E_phi;
     }
 }
@@ -590,6 +613,9 @@ void setup_routine()
     shield.sensors.setConversionParametersLinear(I1_LOW, 0.0049823408F, -10.452284F);
     shield.sensors.setConversionParametersLinear(I2_LOW, 0.004929446F, -10.234404F);
     shield.sensors.setConversionParametersLinear(I_HIGH, 0.00511002F, -10.4447F);
+
+    pid_vc_M.init(pid_vc_M_params);
+    pid_vc_phi.init(pid_vc_phi_params);
 
     uint32_t app_task_number = task.createBackground(loop_application_task);
     // uint32_t com_task_number = task.createBackground(loop_communication_task);

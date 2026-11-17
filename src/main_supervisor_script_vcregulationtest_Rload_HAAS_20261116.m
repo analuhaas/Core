@@ -282,4 +282,4 @@ input('Current probes: turn off current probes, press enter to continue... ', 's
 addpath('C:\Users\ana\Documents\PhD\Presentations et livrables\Templates_Loic\figure_PP_QUEVAL_20231221\core') % Add figure_PP folder to the path
 
 % %Following tutorial without modifications
-figure_PP(figVcReg,'PQ_points/20261117/vc_regulation_proportional_Rload.png','width',13.125,'height',12) % Export to .png
+figure_PP(figVcReg,'PQ_points/20261117/vc_regulation_PI_Rload_zoom.png','width',13.125,'height',12) % Export to .png
