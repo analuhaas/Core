@@ -39,6 +39,41 @@ plot(tMs, scopeMimicry.vc_error);
 ylabel('Voltage (V)');
 legend(sprintf('v_{ref} - v_c (rms %.3f V)', rms(scopeMimicry.vc_error(inLim))), 'Location', 'eastoutside');
 
+% Captures of the phasor (per grid period) regulation have E_M/E_phi instead of Vd/Vq
+if ~isfield(scopeMimicry, 'Vd')
+    % Phasor amplitude and amplitude error
+    ax(3) = subplot(4, 1, 3); hold on, grid on, box on
+    yyaxis left
+    plot(tMs, scopeMimicry.Vc_amplitude);
+    yline(Vref, '--');
+    ylabel('Voltage (V peak)');
+    yyaxis right
+    plot(tMs, scopeMimicry.E_M);
+    ylabel('E_M (V)');
+    legend('|V_c|', '|V_{ref}|', 'E_M = |V_{ref}| - |V_c|', 'Location', 'eastoutside');
+
+    % Phase error
+    ax(4) = subplot(4, 1, 4); hold on, grid on, box on
+    plot(tMs, rad2deg(scopeMimicry.E_phi));
+    ylabel('E_\phi (deg)');
+    legend('E_\phi = \phi_{V_c} - \phi_{V_{ref}}', 'Location', 'eastoutside');
+
+    xlabel('Time (ms)');
+    if ~isempty(tLimMs)
+        linkaxes(ax, 'x');
+        xlim(ax(1), tLimMs);
+        ylim(ax(1), fcn_padded_lim([scopeMimicry.sine(inLim); scopeMimicry.Vgrid(inLim)]));
+        ylim(ax(2), fcn_padded_lim(scopeMimicry.vc_error(inLim)));
+        yyaxis(ax(3), 'left');
+        ylim(ax(3), fcn_padded_lim([scopeMimicry.Vc_amplitude(inLim); Vref]));
+        yyaxis(ax(3), 'right');
+        ylim(ax(3), fcn_padded_lim(scopeMimicry.E_M(inLim)));
+        ylim(ax(4), fcn_padded_lim(rad2deg(scopeMimicry.E_phi(inLim))));
+    end
+    drawnow;
+    return
+end
+
 % Mean dq errors seen by the PIs (filtered V_d/V_q), over tLimMs when given
 E_d = mean(Vref - scopeMimicry.Vd(inLim));
 E_q = mean(0 - scopeMimicry.Vq(inLim));
