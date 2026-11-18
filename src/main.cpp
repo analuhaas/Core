@@ -120,7 +120,7 @@ static constexpr float32_t RMS_EMA_ALPHA = TS / RMS_EMA_TAU;
 /* Size of the scope buffer for data recording */
 static constexpr uint32_t SCOPE_BUFFER_SIZE = 1024;
 /* One scope sample every SCOPE_DECIMATION control steps (sample time = SCOPE_DECIMATION * TS) */
-static constexpr uint32_t SCOPE_DECIMATION = 4;
+static constexpr uint32_t SCOPE_DECIMATION = 2;
 /* Number of channels recorded in the scope for diagnostics */
 static constexpr uint8_t SCOPE_CHANNEL_COUNT = 15;
 
@@ -171,11 +171,12 @@ static float32_t Vhigh_sum;
 static float32_t V_ref = 12*sqrtf(2.0F);
 /* [V] Instantaneous v_c regulation error, sine - Vgrid_meas */
 static float32_t vc_error;
-/* [V] Peak amplitude of the v_c phasor, from regulate_vc_to_vref() (once per grid period) */
+/* [V] Peak amplitude of v_c, |Vc_dq_filt|, from regulate_vc_to_vref() (every control step) */
 static float32_t Vc_amplitude;
-/* [V] Amplitude error V_ref - |V_c|, from regulate_vc_to_vref() (once per grid period) */
+/* [V] Amplitude error V_ref - |V_c|, from regulate_vc_to_vref() (every control step) */
 static float32_t vc_amplitude_error;
-/* [rad] Phase error of v_c relative to the teaching sine, > 0 : v_c leads (once per grid period) */
+/* [rad] Phase error of v_c relative to the teaching sine, atan2(V_q, V_d), > 0 : v_c leads
+ * (every control step) */
 static float32_t vc_phase_error;
 // static float32_t Mp_AC_source = 0.0F;
 /* [V] Amplitude of the local teaching sine wave */
@@ -241,35 +242,65 @@ static dqo_t power;
 // static float32_t power_d;
 // static float32_t power_q;
 
-/* v_c regulation PIs, called once per grid period by regulate_vc_to_vref() */
-/* [s] Sample time of the v_c regulation (one window of one grid period) */
-static constexpr float32_t VC_REG_TS = RMS_WINDOW_SAMPLES * TS;
-/* Amplitude PI: output Mp, from V_ref and |V_c| both divided by Vdc (error in pu of Mp) */
-static constexpr float32_t kp_vc_M = 0.1F;
-/* [s] Gives an integral gain per period Kp * VC_REG_TS / Ti = 0.8 */
-static constexpr float32_t Ti_vc_M = kp_vc_M * VC_REG_TS / 0.8F;
-static constexpr float32_t Td_vc_M = 0.0F;
-static constexpr float32_t N_vc_M = 0.0F;
-static constexpr float32_t lower_bound_vc_M = 0.0F;
-/* Modulation limit */
-static constexpr float32_t upper_bound_vc_M = 0.9F;
-/* Phase PI: output phi_m [rad], from the phase error of v_c (reference 0) */
-static constexpr float32_t kp_vc_phi = 0.1F;
-/* [s] Gives an integral gain per period Kp * VC_REG_TS / Ti = 0.8 */
-static constexpr float32_t Ti_vc_phi = kp_vc_phi * VC_REG_TS / 0.8F;
-static constexpr float32_t Td_vc_phi = 0.0F;
-static constexpr float32_t N_vc_phi = 0.0F;
-static constexpr float32_t lower_bound_vc_phi = -PI;
-static constexpr float32_t upper_bound_vc_phi = PI;
+/* v_c regulation in the dq frame of the teaching sine, by regulate_vc_to_vref() at
+ * every control step. The d axis is aligned with v_ref: V_d = |V_c| cos(phi) and
+ * V_q = |V_c| sin(phi), phi = phase of v_c - phase of v_ref. */
+/* [V] dq components of v_c (from the SOGI alpha/beta Vab), in the frame of v_ref */
+static dqo_t Vc_dq;
+/* [V] Vc_dq after the low-pass filter, input of the PIs */
+static dqo_t Vc_dq_filt;
+/* [pu] Modulation in the dq frame of v_ref: m_d = Mp cos(phi_m), m_q = Mp sin(phi_m).
+ * Output of the PIs in VCREGMODE, built from Mp and phi_m in the other modes. */
+static dqo_t m_dq;
+/* [pu] Modulation in alpha/beta, from m_dq: m_ab.alpha = Mp sin(theta + phi_m) is the
+ * instantaneous modulation index applied to the duty cycle */
+static clarke_t m_ab;
+/* [Hz] Cut-off of the low-pass filter on V_d and V_q. The single-phase SOGI-dq leaves
+ * a 100 Hz ripple on V_d/V_q; the PIs would turn it into a 150 Hz harmonic of v_c
+ * (100 Hz ripple x 50 Hz modulation). 20 Hz attenuates the 100 Hz ripple ~5x
+ * (-14 dB), as in the grid_forming_example (filter_resonance.md). */
+static constexpr float32_t VC_DQ_FILTER_FC = 20.0F;
+/* [s] Time constant of the V_d/V_q low-pass filter (~8 ms) */
+static constexpr float32_t VC_DQ_FILTER_TAU = 1.0F / (2.0F * PI * VC_DQ_FILTER_FC);
+static LowPassFirstOrderFilter vc_d_filter(TS, VC_DQ_FILTER_TAU);
+static LowPassFirstOrderFilter vc_q_filter(TS, VC_DQ_FILTER_TAU);
 
-static PidParams pid_vc_M_params = {VC_REG_TS, kp_vc_M, Ti_vc_M, Td_vc_M, N_vc_M,
-                                    lower_bound_vc_M, upper_bound_vc_M};
-static PidParams pid_vc_phi_params = {VC_REG_TS, kp_vc_phi, Ti_vc_phi, Td_vc_phi, N_vc_phi,
-                                      lower_bound_vc_phi, upper_bound_vc_phi};
-/* PI regulating Mp so that |V_c| follows V_ref */
-static Pid pid_vc_M;
-/* PI regulating phi_m so that v_c is in phase with the teaching sine */
-static Pid pid_vc_phi;
+/* d-axis PI: output m_d = Mp cos(phi_m), from V_d_ref = V_ref and V_d, both divided by
+ * Vdc (v_c peak = Mp * Vdc on the H-bridge, so the plant gain is 1). The 8 ms of the
+ * low-pass filter limit the integral gain: Kp = 0.1, Ki = 40 1/s settles in ~42 ms
+ * (simulation, overshoot ~0.3 V); a higher Ki overshoots. Same Kp and Ki as the
+ * previous per-period PI (Ti = 2.5 ms). */
+static constexpr float32_t kp_vc_d = 0.1F;
+/* [1/s] Integral gain Kp / Ti */
+static constexpr float32_t ki_vc_d = 40.0F;
+/* [s] Integral time of the OwnTech Pid (out = Kp * (e + integral(e) / Ti)) */
+static constexpr float32_t Ti_vc_d = kp_vc_d / ki_vc_d;
+static constexpr float32_t Td_vc_d = 0.0F;
+static constexpr float32_t N_vc_d = 0.0F;
+/* m_d >= 0 keeps v_c in phase with v_ref (no 180 deg flip); 0.9 = modulation limit */
+static constexpr float32_t lower_bound_vc_d = 0.0F;
+static constexpr float32_t upper_bound_vc_d = 0.9F;
+/* q-axis PI: output m_q = Mp sin(phi_m), from V_q_ref = 0 and V_q, both divided by Vdc */
+static constexpr float32_t kp_vc_q = 0.1F;
+/* [1/s] Integral gain Kp / Ti */
+static constexpr float32_t ki_vc_q = 40.0F;
+/* [s] Integral time of the OwnTech Pid */
+static constexpr float32_t Ti_vc_q = kp_vc_q / ki_vc_q;
+static constexpr float32_t Td_vc_q = 0.0F;
+static constexpr float32_t N_vc_q = 0.0F;
+static constexpr float32_t lower_bound_vc_q = -0.9F;
+static constexpr float32_t upper_bound_vc_q = 0.9F;
+/* Modulation limit applied to Mp = |m_dq| (the PI bounds limit each axis alone) */
+static constexpr float32_t MP_MAX = 0.9F;
+
+static PidParams pid_vc_d_params = {TS, kp_vc_d, Ti_vc_d, Td_vc_d, N_vc_d,
+                                    lower_bound_vc_d, upper_bound_vc_d};
+static PidParams pid_vc_q_params = {TS, kp_vc_q, Ti_vc_q, Td_vc_q, N_vc_q,
+                                    lower_bound_vc_q, upper_bound_vc_q};
+/* PI regulating m_d so that V_d follows V_ref */
+static Pid pid_vc_d;
+/* PI regulating m_q so that V_q = 0 (v_c in phase with v_ref) */
+static Pid pid_vc_q;
 /*--------------------------------------------------------------- */
 
 /**********************  SUPPORT FUNCTIONS  ***************************/
@@ -352,79 +383,86 @@ void update_AC_source_sine()
 }
 
 /**
- * @brief Updates the modulation control sine wave.
+ * @brief Updates the modulation from m_dq (set by regulate_vc_to_vref()).
+ *
+ * Called after update_teaching_sine(), so the modulation uses the phase of the
+ * current control step: m_ab.alpha = m_d sin(theta) + m_q cos(theta)
+ * = Mp sin(theta + phi_m), the same modulation as the previous Mp/phi_m version.
  */
 void update_modulation_sine()
-{   
-    delta_phi_m = phi_m - phi_m_old;
-    phi_m_modulo = ot_modulo_2pi(phi_m_modulo + delta_phi_m + W0 * TS);
-    sine_modulation = ot_sin(phi_m_modulo);
+{
+    // delta_phi_m = phi_m - phi_m_old;
+    // phi_m_modulo = ot_modulo_2pi(phi_m_modulo + delta_phi_m + W0 * TS);
+    // sine_modulation = ot_sin(phi_m_modulo);
 
-    delta_duty_cycle = 0.5F + ( Mp * sine_modulation / 2.0F );
-    phi_m_old = phi_m;
+    // delta_duty_cycle = 0.5F + ( Mp * sine_modulation / 2.0F );
+    // phi_m_old = phi_m;
+
+    m_ab = Transform::rotation_to_clarke(m_dq, phi_sine_modulo - PI / 2.0F);
+    /* Complementary legs: v_c = (2 * duty - 1) * Vdc = m_ab.alpha * Vdc */
+    delta_duty_cycle = 0.5F + m_ab.alpha / 2.0F;
 }
 
 /**
  * @brief regulates vc voltage to the reference voltage, acting on Mp and phi_m.
  *
- * The phasor of Vgrid_meas in the frame of the teaching sine is built from a
- * window of one grid period, so Mp and phi_m are corrected once every
- * 20 ms. Needs the switch OPEN: with the switch closed, v_c is imposed by the AC
- * source, Mp can't remove the error and it would ramp up to its limit.
+ * Runs at every control step (SOGI + dq transform, no window): the alpha/beta
+ * components of v_c (Vab, from sogi_v in calculate_power()) are rotated into the
+ * frame of the teaching sine, low-pass filtered, and two PIs drive
+ * m_d = Mp cos(phi_m) and m_q = Mp sin(phi_m) so that V_d = V_ref and V_q = 0.
+ * Must be called at every control step, before update_teaching_sine(): outside
+ * VCREGMODE it only resets the PIs, so that they start from the Mp and phi_m in
+ * use when the regulation starts. Needs the switch OPEN: with the switch closed,
+ * v_c is imposed by the AC source, Mp can't remove the error and it would ramp
+ * up to its limit.
  */
 void regulate_vc_to_vref()
 {
-    /* Leave false while the supervisor writes Mp, and never true together with
-     * the one of regulate_vs_to_vref (both use Vgrid_meas) */
+    /* Leave false while the supervisor writes Mp */
     static constexpr bool REGULATION_ENABLED = true;
-    /* [V] Peak voltage below which the measured phase is not trusted */
-    static constexpr float32_t V_MIN = 2.0F * SQRT2;
-
-    static float32_t sum_sin;
-    static float32_t sum_cos;
-    static uint32_t window_samples;
-
-    if (!REGULATION_ENABLED || mode != VCREGMODE) {
-        sum_sin = 0.0F;
-        sum_cos = 0.0F;
-        window_samples = 0;
-        /* The PIs start from the Mp and phi_m in use when the regulation starts */
-        pid_vc_M.reset(Mp);
-        pid_vc_phi.reset(phi_m);
-        return;
-    }
 
     /* Called before update_teaching_sine(): phi_sine_modulo is still the phase of the
-     * control step in which Vgrid_meas was read */
-    sum_sin += Vgrid_meas * ot_sin(phi_sine_modulo);
-    sum_cos += Vgrid_meas * ot_cos(phi_sine_modulo);
-    window_samples++;
-    if (window_samples < RMS_WINDOW_SAMPLES) {
+     * control step in which Vgrid_meas (and so Vab) was read.
+     * The SOGI gives, for v_c = V sin(theta + phi): alpha = V sin(theta + phi) and
+     * beta = -V cos(theta + phi). Rotating by theta - pi/2 aligns the d axis with
+     * v_ref = V_ref sin(theta): V_d = V cos(phi), V_q = V sin(phi). */
+    Vc_dq = Transform::rotation_to_dqo(Vab, phi_sine_modulo - PI / 2.0F);
+    // Vc_dq_filt.d = vc_d_filter.calculateWithReturn(Vc_dq.d);
+    // Vc_dq_filt.q = vc_q_filter.calculateWithReturn(Vc_dq.q);
+    Vc_dq_filt.d = Vc_dq.d;
+    Vc_dq_filt.q = Vc_dq.q;
+
+    Vc_amplitude = sqrtf(Vc_dq_filt.d * Vc_dq_filt.d + Vc_dq_filt.q * Vc_dq_filt.q);
+    vc_amplitude_error = V_ref - Vc_amplitude;
+    vc_phase_error = atan2f(Vc_dq_filt.q, Vc_dq_filt.d);
+
+    if (!REGULATION_ENABLED || mode != VCREGMODE) {
+        /* Outside VCREGMODE the modulation comes from Mp and phi_m (Config/wMp,
+         * wphi_m, e.g. POWERMODE), and the PIs start from it (bumpless start) */
+        m_dq.d = Mp * ot_cos(phi_m);
+        m_dq.q = Mp * ot_sin(phi_m);
+        pid_vc_d.reset(m_dq.d);
+        pid_vc_q.reset(m_dq.q);
         return;
     }
 
-    /* For Vgrid_meas = V * sin(phi_sine_modulo + phi): sum_sin -> V * cos(phi) * N / 2 and
-     * sum_cos -> V * sin(phi) * N / 2 */
-    const float32_t V_re = 2.0F * sum_sin / RMS_WINDOW_SAMPLES;
-    const float32_t V_im = 2.0F * sum_cos / RMS_WINDOW_SAMPLES;
-    const float32_t V_c = sqrtf(V_re * V_re + V_im * V_im);
-    sum_sin = 0.0F;
-    sum_cos = 0.0F;
-    window_samples = 0;
-
-    /* v_c peak is Mp * Vdc on an H-bridge, so V_ref and V_c are divided by Vdc */
+    /* v_c peak is |m_dq| * Vdc on an H-bridge, so the references and the measures are
+     * divided by Vdc (no feedforward: the PIs give the whole modulation) */
     const float32_t vdc = control_bus_voltage();
-    Mp = pid_vc_M.calculateWithReturn(V_ref / vdc, V_c / vdc);
-    Vc_amplitude = V_c;
-    vc_amplitude_error = V_ref - V_c;
+    m_dq.d = pid_vc_d.calculateWithReturn(V_ref / vdc, Vc_dq_filt.d / vdc);
+    m_dq.q = pid_vc_q.calculateWithReturn(0.0F, Vc_dq_filt.q / vdc);
 
-    if (V_c > V_MIN) {
-        /* > 0 : v_c leads the reference, so the modulation phase has to go back
-         * (error of the PI = 0 - E_phi) */
-        const float32_t E_phi = atan2f(V_im, V_re);
-        phi_m = pid_vc_phi.calculateWithReturn(0.0F, E_phi);
-        vc_phase_error = E_phi;
+    /* Modulation limit on |m_dq| (the PI bounds limit each axis alone): scales
+     * m_d and m_q down together, which keeps the phase */
+    Mp = sqrtf(m_dq.d * m_dq.d + m_dq.q * m_dq.q);
+    if (Mp > MP_MAX) {
+        m_dq.d *= MP_MAX / Mp;
+        m_dq.q *= MP_MAX / Mp;
+        Mp = MP_MAX;
     }
+    /* Mp and phi_m of the regulated modulation, for the ThingSet reads (rMp_pu,
+     * rPhiM_rad); the duty cycle is computed from m_dq in update_modulation_sine() */
+    phi_m = atan2f(m_dq.q, m_dq.d);
 }
 
 /**
@@ -503,14 +541,16 @@ void setup_scope()
     scope.connectChannel(delta_duty_cycle, "duty_cycle");
     /* v_c regulation. The 15 channels x 1024 samples are allocated on the heap,
      * which has no room for more channels: these replace duty_cycle_1/2,
-     * sine_modulation and state */
+     * sine_modulation and state, and Vd/Vq replace E_M, E_phi, T1 and T2 (the
+     * temperatures are read over ThingSet, rTemp1_degC/rTemp2_degC). The dq
+     * references are constants (V_d_ref = V_ref, V_q_ref = 0), not recorded. */
     scope.connectChannel(vc_error, "vc_error");               /* v_ref - v_c [V] */
     scope.connectChannel(Vc_amplitude, "Vc_amplitude");       /* |V_c| peak [V] */
-    scope.connectChannel(vc_amplitude_error, "E_M");          /* V_ref - |V_c| [V] */
-    scope.connectChannel(vc_phase_error, "E_phi");            /* phase of v_c - phase of v_ref [rad] */
+    scope.connectChannel(Vc_dq_filt.d, "Vd");                 /* V_d after the low-pass filter, PI input [V] */
+    scope.connectChannel(Vc_dq_filt.q, "Vq");                 /* V_q after the low-pass filter, PI input [V] */
     scope.connectChannel(I_high_value, "idc");
-    scope.connectChannel(temp_1_value, "T1");
-    scope.connectChannel(temp_2_value, "T2");
+    scope.connectChannel(Vc_dq.d, "Vd_raw");                  /* V_d before the low-pass filter [V] */
+    scope.connectChannel(Vc_dq.q, "Vq_raw");                  /* V_q before the low-pass filter [V] */
     /* No pre-trigger samples: the capture is re-armed and triggered in the same
      * control step (Config/wScopeArm), so a pre-trigger part of the buffer would
      * still hold samples of the previous capture. */
@@ -614,8 +654,8 @@ void setup_routine()
     shield.sensors.setConversionParametersLinear(I2_LOW, 0.004929446F, -10.234404F);
     shield.sensors.setConversionParametersLinear(I_HIGH, 0.00511002F, -10.4447F);
 
-    pid_vc_M.init(pid_vc_M_params);
-    pid_vc_phi.init(pid_vc_phi_params);
+    pid_vc_d.init(pid_vc_d_params);
+    pid_vc_q.init(pid_vc_q_params);
 
     uint32_t app_task_number = task.createBackground(loop_application_task);
     // uint32_t com_task_number = task.createBackground(loop_communication_task);
@@ -786,6 +826,10 @@ void loop_critical_task()
         mode = ERRORMODE;
     }
 
+    /* Every step, before update_teaching_sine(): regulates in VCREGMODE, and only
+     * filters the v_c dq components and resets the PIs in the other modes */
+    regulate_vc_to_vref();
+
     if (mode == POWERMODE) {
         update_teaching_sine();
         update_AC_source_sine();
@@ -801,7 +845,6 @@ void loop_critical_task()
             trigger = true;
         }
     } else if (mode == VCREGMODE) {
-        regulate_vc_to_vref();
         update_teaching_sine();
         update_AC_source_sine();
         update_modulation_sine();

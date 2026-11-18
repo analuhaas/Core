@@ -22,7 +22,7 @@ dcSupplyLimitA = 9; %[A] DC supply current limit
 %  ScopeMimicry parameters (board scope, dumped on the console port)
 consolePort    = "";              % board console port, e.g. "COM41" - "" = the board port not used by ThingSet
 scopeTs        = 2 * 100e-6;      % [s] ScopeMimicry sample time (SCOPE_DECIMATION * CONTROL_TASK_PERIOD_US in main.cpp)
-scopeTimeout_s = 10;              % [s] max time to wait for the capture and for the dump
+scopeTimeout_s = 30;              % [s] max time to wait for the capture and for the dump
 %% ------------------------------------------------------------------
 %  USER SETTINGS FOR PICOSCOPE CONFIGURATION - edit these to match what you need
 %  ------------------------------------------------------------------
@@ -238,6 +238,7 @@ scopeMimicry = fcn_scope_mimicry_acquisition(ts, con, scopeTs, scopeTimeout_s, f
 fcn_plot_picoscope(channelData, numSamples, timeIntervalNanoSeconds, channelLetters, probeUnit, picoSerialNumbers, secondsPerDivision);
 fcn_plot_scope_mimicry(scopeMimicry);
 figVcReg = fcn_plot_scope_vc_regulation(scopeMimicry);
+figVcRegZoom = fcn_plot_scope_vc_regulation(scopeMimicry, [150 200]); % [ms] steady state only
 
 % Operating point reached by the regulation, read on the board
 Mp = ts.read("Measurements/rMp_pu");
@@ -282,4 +283,5 @@ input('Current probes: turn off current probes, press enter to continue... ', 's
 addpath('C:\Users\ana\Documents\PhD\Presentations et livrables\Templates_Loic\figure_PP_QUEVAL_20231221\core') % Add figure_PP folder to the path
 
 % %Following tutorial without modifications
-figure_PP(figVcReg,'PQ_points/20261117/vc_regulation_PI_Rload_zoom.png','width',13.125,'height',12) % Export to .png
+figure_PP(figVcReg,'PQ_points/20261117/vc_regulation_PI_DQ_nofilt_Rload.png','width',13.125,'height',12) % Export to .png
+figure_PP(figVcRegZoom,'PQ_points/20261117/vc_regulation_PI_DQ_nofilt_Rload_zoom.png','width',13.125,'height',12) % Export to .png

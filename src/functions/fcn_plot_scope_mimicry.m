@@ -10,7 +10,8 @@ function figureHandle = fcn_plot_scope_mimicry(scopeMimicry)
 
 tMs = scopeMimicry.t * 1e3;
 hasPower = isfield(scopeMimicry, 'P_board') && isfield(scopeMimicry, 'Q_board');
-numRows = 5 + hasPower;
+hasTemp = isfield(scopeMimicry, 'T1') && isfield(scopeMimicry, 'T2'); % not recorded since Vd/Vq were added
+numRows = 4 + hasTemp + hasPower;
 
 figureHandle = fcn_reuse_figure('ScopeMimicry measurements'); % one window, updated at each call
 
@@ -44,16 +45,18 @@ plot(tMs, scopeMimicry.idc);
 ylabel('Current (A)');
 legend('Vdc \leftrightarrow u_{dc}', 'idc \leftrightarrow i_{dc}', 'Location', 'eastoutside');
 
-% Temperatures (board Temp1 and Temp2)
-subplot(numRows, 1, 5), hold on, grid on, box on
-plot(tMs, scopeMimicry.T1);
-plot(tMs, scopeMimicry.T2);
-ylabel('T (°C)');
-legend('T1 (Temp1)', 'T2 (Temp2)', 'Location', 'eastoutside');
+% Temperatures (board Temp1 and Temp2), when the capture has them
+if hasTemp
+    subplot(numRows, 1, 5), hold on, grid on, box on
+    plot(tMs, scopeMimicry.T1);
+    plot(tMs, scopeMimicry.T2);
+    ylabel('T (°C)');
+    legend('T1 (Temp1)', 'T2 (Temp2)', 'Location', 'eastoutside');
+end
 
 % Active and reactive power computed by the board (SOGI + dq on Vgrid and I1_low)
 if hasPower
-    subplot(numRows, 1, 6), hold on, grid on, box on
+    subplot(numRows, 1, 5 + hasTemp), hold on, grid on, box on
     plot(tMs, scopeMimicry.P_board);
     plot(tMs, scopeMimicry.Q_board);
     ylabel('P (W), Q (VAr)');
